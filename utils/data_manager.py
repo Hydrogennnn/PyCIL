@@ -1,6 +1,8 @@
 import logging
 import numpy as np
+from numpy.lib.arraysetops import isin
 from PIL import Image
+from torch.nn.functional import instance_norm
 from torch.utils.data import Dataset
 from torchvision import transforms
 from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE
@@ -204,6 +206,10 @@ class DummyDataset(Dataset):
     
     def __getitem__(self, idx):
         
+        
+        sample = self.data[idx]
+        assert isinstance(sample, dict)
+        sample = {k: self.trsf(v) for k,v in sample.items()}
         return self.data[idx], self.labels[idx]
     
     # def __getitem__(self, idx):

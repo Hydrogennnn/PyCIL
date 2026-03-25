@@ -16,7 +16,7 @@ from convs.memo_cifar_resnet import get_resnet32_a2fc as get_memo_resnet32 #for 
 from convs.ACL_buffer import RandomBuffer, activation_t
 from convs.linears import RecursiveLinear
 from typing import Dict, Any
-
+from backbones.continual_moe import Continual_MoE
 
 def get_convnet(args, pretrained=False):
     name = args["convnet_type"].lower()
@@ -1264,3 +1264,58 @@ class TSAttention(nn.Module):
         feat = feat.transpose(1, 2).flatten(2)
 
         return feat
+    
+    
+class MoENet(BaseNet):
+    def __init__(self, args, pretrained, gradcam=False):
+        super().__init__(args, pretrained)
+        self.moe = Continual_MoE()
+        
+        
+    @property
+    def feature_dim(self):
+        return self.moe.d_model
+        
+    def update_fc(self, nb_classes):
+        # nb_classes : 总的class数量
+        fc = self.generate_fc(self.feature_dim, nb_classes)
+        # 复制前面任务的线性层
+        if self.fc is not None:
+            nb_output = self.fc.out_features
+            weight = copy.deepcopy(self.fc.weight.data)
+            bias = copy.deepcopy(self.fc.bias.data)
+            fc.weight.data[:nb_output] = weight
+            fc.bias.data[:nb_output] = bias
+
+        del self.fc
+        self.fc = fc
+
+    def weight_align(self, increment):
+        weights = self.fc.weight.data
+        newnorm = torch.norm(weights[-increment:, :], p=2, dim=1)
+        oldnorm = torch.norm(weights[:-increment, :], p=2, dim=1)
+        meannew = torch.mean(newnorm)
+        meanold = torch.mean(oldnorm)
+        gamma = meanold / meannew
+        print("alignweights,gamma=", gamma)
+        self.fc.weight.data[-increment:, :] *= gamma
+
+    def generate_fc(self, in_dim, out_dim):
+        fc = SimpleLinear(in_dim, out_dim)
+
+        return fc
+
+    def forward(self, x):
+        v, a = x["video"], x["audio"]
+        v = self.moe(v)
+        a = self.moe(a)
+        x = (v+a)/2
+        
+        # x = self.moe(x)
+        out = self.fc(x)
+        # out.update(x)
+        # if hasattr(self, "gradcam") and self.gradcam:
+        #     out["gradcam_gradients"] = self._gradcam_gradients
+        #     out["gradcam_activations"] = self._gradcam_activations
+
+        return out
