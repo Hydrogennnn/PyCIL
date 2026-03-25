@@ -55,8 +55,8 @@ class BaseLearner(object):
         if self._fixed_memory:
             self._construct_exemplar_unified(data_manager, per_class)
         else:
-            self._reduce_exemplar(data_manager, per_class)
-            self._construct_exemplar(data_manager, per_class)
+            self._reduce_exemplar(data_manager, per_class) # 旧类每类只保留前 m 个样本
+            self._construct_exemplar(data_manager, per_class) #为新类贪心选 m 个代表样本
 
     def save_checkpoint(self, filename):
         self._network.cpu()

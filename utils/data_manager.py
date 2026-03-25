@@ -3,7 +3,7 @@ import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA
+from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE
 from tqdm import tqdm
 import torch
 
@@ -129,61 +129,6 @@ class DataManager(object):
         val_targets = np.concatenate(val_targets)
         return DummyDataset(val_data, val_targets, trsf, self.use_path, self.aug if source == "train" and mode == "train" else 1)
 
-    def get_dataset_with_split(
-        self, indices, source, mode, appendent=None, val_samples_per_class=0
-    ):
-        if source == "train":
-            x, y = self._train_data, self._train_targets
-        elif source == "test":
-            x, y = self._test_data, self._test_targets
-        else:
-            raise ValueError("Unknown data source {}.".format(source))
-
-        if mode == "train":
-            trsf = transforms.Compose([*self._train_trsf, *self._common_trsf])
-        elif mode == "test":
-            trsf = transforms.Compose([*self._test_trsf, *self._common_trsf])
-        else:
-            raise ValueError("Unknown mode {}.".format(mode))
-
-        train_data, train_targets = [], []
-        val_data, val_targets = [], []
-        for idx in indices:
-            class_data, class_targets = self._select(
-                x, y, low_range=idx, high_range=idx + 1
-            )
-            val_indx = np.random.choice(
-                len(class_data), val_samples_per_class, replace=False
-            )
-            train_indx = list(set(np.arange(len(class_data))) - set(val_indx))
-            val_data.append(class_data[val_indx])
-            val_targets.append(class_targets[val_indx])
-            train_data.append(class_data[train_indx])
-            train_targets.append(class_targets[train_indx])
-
-        if appendent is not None:
-            appendent_data, appendent_targets = appendent
-            for idx in range(0, int(np.max(appendent_targets)) + 1):
-                append_data, append_targets = self._select(
-                    appendent_data, appendent_targets, low_range=idx, high_range=idx + 1
-                )
-                val_indx = np.random.choice(
-                    len(append_data), val_samples_per_class, replace=False
-                )
-                train_indx = list(set(np.arange(len(append_data))) - set(val_indx))
-                val_data.append(append_data[val_indx])
-                val_targets.append(append_targets[val_indx])
-                train_data.append(append_data[train_indx])
-                train_targets.append(append_targets[train_indx])
-
-        train_data, train_targets = np.concatenate(train_data), np.concatenate(
-            train_targets
-        )
-        val_data, val_targets = np.concatenate(val_data), np.concatenate(val_targets)
-
-        return DummyDataset(
-            train_data, train_targets, trsf, self.use_path, self.aug
-        ), DummyDataset(val_data, val_targets, trsf, self.use_path)
 
     def _setup_data(self, dataset_name, shuffle, seed):
         idata = _get_idata(dataset_name)
@@ -245,32 +190,37 @@ class DataManager(object):
 
 
 class DummyDataset(Dataset):
-    def __init__(self, images, labels, trsf, use_path=False, aug=1):
-        assert len(images) == len(labels), "Data size error!"
+    def __init__(self, data, labels, trsf, use_path=False, aug=1):
+        assert len(data) == len(labels), "Data size error!"
         self.aug = aug
-        self.images = images
+        self.data = data
         self.labels = labels
         self.trsf = trsf
-        self.use_path = use_path
+        # self.use_path = use_path
 
     def __len__(self):
-        return len(self.images)
+        return len(self.data)
 
+    
     def __getitem__(self, idx):
-        if self.aug == 1:
-            if self.use_path:
-                image = self.trsf(pil_loader(self.images[idx]))
-            else:
-                image = self.trsf(Image.fromarray(self.images[idx]))
-            label = self.labels[idx]
-            return idx, image, label
-        else:
-            if self.use_path:
-                images = [self.trsf(pil_loader(self.images[idx])) for _ in range(self.aug)]
-            else:
-                images = [self.trsf(Image.fromarray(self.images[idx])) for _ in range(self.aug)]
-            label = self.labels[idx]
-            return idx, *images, label
+        
+        return self.data[idx], self.labels[idx]
+    
+    # def __getitem__(self, idx):
+    #     if self.aug == 1:
+    #         if self.use_path:
+    #             image = self.trsf(pil_loader(self.data[idx]))
+    #         else:
+    #             image = self.trsf(Image.fromarray(self.data[idx]))
+    #         label = self.labels[idx]
+    #         return idx, image, label
+    #     else:
+    #         if self.use_path:
+    #             images = [self.trsf(pil_loader(self.data[idx])) for _ in range(self.aug)]
+    #         else:
+    #             images = [self.trsf(Image.fromarray(self.data[idx])) for _ in range(self.aug)]
+    #         label = self.labels[idx]
+    #         return idx, *images, label
 
 
 def _map_new_class_index(y, order):
@@ -291,6 +241,8 @@ def _get_idata(dataset_name):
         return iCIFAR100_AA()
     elif name == "cifar10_aa":
         return iCIFAR10_AA()
+    elif name == "ave":
+        return AVE()
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
 

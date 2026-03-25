@@ -1,8 +1,10 @@
 import numpy as np
+from numpy.random.mtrand import f
 from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
 from . import autoaugment
 from . import ops
+from sklearn.model_selection import train_test_split
 
 class iData(object):
     train_trsf = []
@@ -149,4 +151,29 @@ class iImageNet100(iData):
 
 
 class AVE(iData):
-    
+    class_order = [18, 16, 10, 21, 27, 6, 5, 11, 14, 9, 24, 12, 19, 15, 25, 1, 13, 2, 17, 26, 4, 22, 7, 8, 23, 0, 3, 20]
+
+    train_trsf = [transforms.ToTensor()]
+    test_trsf = [transforms.ToTensor()]
+
+    def download_data(self):
+        audio_features = np.load("./data/AVE/audio_features.npy")
+        video_features = np.load("./data/AVE/video_features.npy")
+        labels = np.load("./data/AVE/targets.npy")
+        
+
+        
+        (video_train, video_test,
+        audio_train, audio_test,
+        y_train, y_test) = train_test_split(video_features, audio_features, labels, test_size=0.2,
+                                            random_state=42, shuffle=True)
+        train_size, test_size = len(y_train), len(y_test)
+        self.train_data = [{"video": video_features[i],
+                            "audio": audio_features[i]} for i in range(train_size)]
+        
+        self.train_targets = y_train.astype(np.int64)
+        
+        self.test_data = [{"video": video_features[i],
+                            "audio": audio_features[i]} for i in range(test_size)]
+        
+        self.test_targets = y_test.astype(np.int64)
