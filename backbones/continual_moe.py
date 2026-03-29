@@ -1,4 +1,4 @@
-from torch._C import TreeView
+
 import torch
 import torch.nn as nn
 from torch.distributions import Normal
@@ -172,13 +172,17 @@ class Continual_MoE(nn.Module):
     def __init__(self, ) -> None:
         super().__init__()
         self.experts_num=32
-        
+        self.register_buffer("mean", torch.tensor([0.0]))
+        self.register_buffer("std", torch.tensor([1.0]))
         self.top_k = 2
         self.d_model = 768
         self.ffn_num = 64
         self.router = nn.Parameter(torch.zeros(self.d_model, self.experts_num), requires_grad=True)
         self.w_noise = nn.Parameter(torch.zeros(self.d_model, self.experts_num), requires_grad=True)
         self.adaptmlp_list = nn.ModuleList()
+        self.noisy_gating = True
+        self.softmax = nn.Softmax(1)
+        self.softplus = nn.Softplus()
         for _ in range(self.experts_num):  #
             self.adaptmlp = Adapter(d_model=self.d_model, dropout=0.1, bottleneck=self.ffn_num,
                                     init_option='lora',
@@ -189,7 +193,7 @@ class Continual_MoE(nn.Module):
         
         
     def forward(self, x):
-        gates, load = self.noisy_top_k_gating(x, self.is_train, self.router,self.w_noise)
+        gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
         dispatcher = SparseDispatcher(self.experts_num, gates)
         expert_inputs = dispatcher.dispatch(x)  # list of [n_i, d_model]，n_i 为分配到第i个专家的样本数
         expert_outputs = [self.adaptmlp_list[i](expert_inputs[i].to(x), add_residual=True)
@@ -240,6 +244,17 @@ class Continual_MoE(nn.Module):
             load = self._gates_to_load(gates)
         return gates, load
 
+    def _gates_to_load(self, gates):
+        """Compute the true load per expert, given the gates.
+        The load is the number of examples for which the corresponding gate is >0.
+        Args:
+        gates: a `Tensor` of shape [batch_size, n]
+        Returns:
+        a float32 `Tensor` of shape [n]
+        """
+        return (gates > 0).sum(0)
+    
+    
     def _prob_in_top_k(self, clean_values, noisy_values, noise_stddev, noisy_top_values):
         """Helper function to NoisyTopKGating.
         Computes the probability that value is in top k, given different random noise.

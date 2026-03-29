@@ -139,7 +139,7 @@ class DataManager(object):
         # Data
         self._train_data, self._train_targets = idata.train_data, idata.train_targets
         self._test_data, self._test_targets = idata.test_data, idata.test_targets
-        self.use_path = idata.use_path
+        self.use_path = False
 
         # Transforms
         self._train_trsf = idata.train_trsf
@@ -209,7 +209,7 @@ class DummyDataset(Dataset):
         
         sample = self.data[idx]
         assert isinstance(sample, dict)
-        sample = {k: self.trsf(v) for k,v in sample.items()}
+        sample = {k: torch.tensor(v) for k,v in sample.items()}
         return self.data[idx], self.labels[idx]
     
     # def __getitem__(self, idx):

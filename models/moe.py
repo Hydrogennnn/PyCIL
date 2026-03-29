@@ -39,6 +39,20 @@ class MoE(BaseLearner):
         self._old_network = self._network.copy().freeze()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
+        
+        
+    def _compute_accuracy(self, model, loader):
+        model.eval()
+        correct, total = 0, 0
+        for i, (inputs, targets) in enumerate(loader):
+            inputs = {k:v.to(self._device) for k,v in inputs.items()}
+            with torch.no_grad():
+                outputs = model(inputs)["logits"]
+            predicts = torch.max(outputs, dim=1)[1]
+            correct += (predicts.cpu() == targets).sum()
+            total += len(targets)
+
+        return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -47,7 +61,7 @@ class MoE(BaseLearner):
         )
         self._network.update_fc(self._total_classes)
         logging.info(
-            "Learning on {}-{}".format(self._known_classes, self._total_classes)
+            "Learning on {}-{}".format(self._known_classes, self._total_classes - 1)
         )
 
         train_dataset = data_manager.get_dataset(
@@ -107,7 +121,7 @@ class MoE(BaseLearner):
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
-            for i, (_, inputs, targets) in enumerate(train_loader):
+            for i, (inputs, targets) in enumerate(train_loader):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
                 logits = self._network(inputs)["logits"]
 
@@ -153,7 +167,7 @@ class MoE(BaseLearner):
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
-            for i, (_, inputs, targets) in enumerate(train_loader):
+            for i, (inputs, targets) in enumerate(train_loader):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
                 logits = self._network(inputs)["logits"]
 

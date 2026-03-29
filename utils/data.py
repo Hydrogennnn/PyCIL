@@ -168,12 +168,12 @@ class AVE(iData):
         y_train, y_test) = train_test_split(video_features, audio_features, labels, test_size=0.2,
                                             random_state=42, shuffle=True)
         train_size, test_size = len(y_train), len(y_test)
-        self.train_data = [{"video": video_features[i],
-                            "audio": audio_features[i]} for i in range(train_size)]
+        self.train_data = [{"video": video_train[i],
+                            "audio": audio_train[i]} for i in range(train_size)]
         
         self.train_targets = y_train.astype(np.int64)
         
-        self.test_data = [{"video": video_features[i],
-                            "audio": audio_features[i]} for i in range(test_size)]
+        self.test_data = [{"video": video_test[i],
+                            "audio": audio_test[i]} for i in range(test_size)]
         
         self.test_targets = y_test.astype(np.int64)

@@ -1275,6 +1275,14 @@ class MoENet(BaseNet):
     @property
     def feature_dim(self):
         return self.moe.d_model
+    
+    def extract_vector(self, x):
+        v, a = x["video"], x["audio"]
+        v = self.moe(v)
+        a = self.moe(a)
+        x = (v+a)/2
+        
+        return x
         
     def update_fc(self, nb_classes):
         # nb_classes : 总的class数量
@@ -1319,3 +1327,5 @@ class MoENet(BaseNet):
         #     out["gradcam_activations"] = self._gradcam_activations
 
         return out
+    
+    
