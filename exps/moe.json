@@ -10,6 +10,7 @@
     "model_name": "moe",
     "convnet_type": "resnet32",
     "device" : ["3"],
-    "seed": [1993]
+    "seed": [1993],
+    "project": "nips26"
 }
 

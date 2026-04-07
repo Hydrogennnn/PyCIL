@@ -10,6 +10,10 @@ from models.base import BaseLearner
 from utils.inc_net import MoENet
 
 from utils.toolkit import target2onehot, tensor2numpy
+import wandb
+
+
+
 
 EPSILON = 1e-8
 
@@ -40,19 +44,34 @@ class MoE(BaseLearner):
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
         
-        
-    def _compute_accuracy(self, model, loader):
+    
+    def _compute_accuracy(self, model, loader, old_model=None):
         model.eval()
         correct, total = 0, 0
+        test_losses = 0.0
         for i, (inputs, targets) in enumerate(loader):
-            inputs = {k:v.to(self._device) for k,v in inputs.items()}
+            inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
             with torch.no_grad():
                 outputs = model(inputs)["logits"]
             predicts = torch.max(outputs, dim=1)[1]
-            correct += (predicts.cpu() == targets).sum()
+            correct += (predicts == targets).sum()
             total += len(targets)
+            
+            logits = outputs
 
-        return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+            loss_clf = F.cross_entropy(logits, targets)
+            if old_model is not None:
+                loss_kd = _KD_loss(
+                    logits[:, : self._known_classes],
+                    self._old_network(inputs)["logits"],
+                    T,
+                )
+                loss = loss_clf + loss_kd
+            else:
+                loss = loss_clf
+            test_losses += loss.item()
+
+        return np.around(tensor2numpy(correct) * 100 / total, decimals=2), test_losses
 
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -139,7 +158,7 @@ class MoE(BaseLearner):
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
             if epoch % 5 == 0:
-                test_acc = self._compute_accuracy(self._network, test_loader)
+                test_acc, _ = self._compute_accuracy(self._network, test_loader)
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
                     self._cur_task,
                     epoch + 1,
@@ -188,29 +207,51 @@ class MoE(BaseLearner):
                 _, preds = torch.max(logits, dim=1)
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
-
+            
             scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-            if epoch % 5 == 0:
-                test_acc = self._compute_accuracy(self._network, test_loader)
-                info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
-                    self._cur_task,
-                    epoch + 1,
-                    epochs,
-                    losses / len(train_loader),
-                    train_acc,
-                    test_acc,
-                )
-            else:
-                info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
-                    self._cur_task,
-                    epoch + 1,
-                    epochs,
-                    losses / len(train_loader),
-                    train_acc,
-                )
+            test_acc, test_loss = self._compute_accuracy(self._network, test_loader, self._old_network)
+
+            
+            # if epoch % 5 == 0:
+            #     test_acc = self._compute_accuracy(self._network, test_loader)
+            #     info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
+            #         self._cur_task,
+            #         epoch + 1,
+            #         epochs,
+            #         losses / len(train_loader),
+            #         train_acc,
+            #         test_acc,
+            #     )
+            # else:
+            #     info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
+            #         self._cur_task,
+            #         epoch + 1,
+            #         epochs,
+            #         losses / len(train_loader),
+            #         train_acc,
+            #     )
+            
+            
+            info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
+                self._cur_task,
+                epoch + 1,
+                epochs,
+                losses / len(train_loader),
+                train_acc,
+                test_acc,
+            )
+            
+            wandb.log({
+                f"train/task_{self._cur_task}_acc": train_acc,
+                f"train/task_{self._cur_task}_loss" : losses,
+                f"eval/task_{self._cur_task}_acc" : test_acc,
+                f"eval/task_{self._cur_task}" : test_loss
+            })
+            
             prog_bar.set_description(info)
         logging.info(info)
+        
 
 
 def _KD_loss(pred, soft, T):

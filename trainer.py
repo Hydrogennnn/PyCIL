@@ -7,7 +7,7 @@ from utils.data_manager import DataManager
 from utils.toolkit import count_parameters
 import os
 import numpy as np
-
+import wandb
 
 def train(args):
     seed_list = copy.deepcopy(args["seed"])
@@ -26,7 +26,11 @@ def _train(args):
     
     if not os.path.exists(logs_name):
         os.makedirs(logs_name)
-
+    
+    wandb.init(
+        project = args["project"]
+    )
+    
     logfilename = "logs/{}/{}/{}/{}/{}_{}_{}".format(
         args["model_name"],
         args["dataset"],
