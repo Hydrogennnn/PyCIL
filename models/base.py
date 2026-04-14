@@ -714,7 +714,7 @@ class BaseLearner(object):
                 i = np.argmin(np.sqrt(np.sum((class_mean - mu_p) ** 2, axis=1)))
 
                 selected_exemplars.append(
-                    np.array(data[i])
+                    data[i]
                 )  # New object to avoid passing by inference
                 exemplar_vectors.append(
                     np.array(vectors[i])

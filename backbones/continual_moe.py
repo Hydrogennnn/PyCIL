@@ -53,9 +53,9 @@ class Adapter(nn.Module):
 
         down = self.down_proj(x)
         down = self.non_linear_func(down)
-        down = nn.functional.dropout(down, p=self.dropout, training=self.training)
+        # down = nn.functional.dropout(down, p=self.dropout, training=self.training)
         up = self.up_proj(down)
-
+        up = nn.functional.dropout(up, p=self.dropout, training=self.training)
         up = up * self.scale
 
         if self.adapter_layernorm_option == 'out': #  none
@@ -184,7 +184,7 @@ class Continual_MoE(nn.Module):
         self.softmax = nn.Softmax(1)
         self.softplus = nn.Softplus()
         for _ in range(self.experts_num):  #
-            self.adaptmlp = Adapter(d_model=self.d_model, dropout=0.5, bottleneck=self.ffn_num,
+            self.adaptmlp = Adapter(d_model=self.d_model, dropout=0.2, bottleneck=self.ffn_num,
                                     init_option='lora',
                                     adapter_scalar=0.1,
                                     adapter_layernorm_option='out',

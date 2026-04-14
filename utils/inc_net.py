@@ -1281,6 +1281,7 @@ class MoENet(BaseNet):
         v = self.moe(v)
         a = self.moe(a)
         x = torch.cat([v, a], dim=1)
+        x = self.ln(x)
         return x
         
     def update_fc(self, nb_classes):

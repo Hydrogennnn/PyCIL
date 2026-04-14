@@ -18,14 +18,14 @@ import wandb
 EPSILON = 1e-8
 
 init_epoch = 100
-init_lr = 1e-2
+init_lr = 1e-3
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
 epochs = 100
-lrate = 1e-2
+lrate = 1e-3
 milestones = [80, 120]
 lrate_decay = 0.1
 batch_size = 128
@@ -40,13 +40,53 @@ class MoE(BaseLearner):
         self._network = MoENet(args, False)
 
     def after_task(self):
-        if self._cur_task > 0:
-            self._network.weight_align(self._total_classes - self._known_classes)
         self._old_network = self._network.copy().freeze()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
         
-    
+    def visualize_logits(self, model, loader):
+        model.eval()
+        y_pred = []
+        y_true = []
+        res = []
+        for i, (inputs, targets) in enumerate(loader):
+            inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
+            with torch.no_grad():
+                outputs = model(inputs)["logits"]
+            predicts = torch.topk(
+                outputs, k=1, dim=1, largest=True, sorted=True
+            )[1]
+            res.append(outputs.cpu().numpy())
+            y_pred.append(predicts.cpu().numpy())
+            y_true.append(targets.cpu().numpy())
+        
+        res = np.concatenate(res)
+        y_pred = np.concatenate(y_pred)
+        y_true = np.concatenate(y_true)
+        
+        assert len(y_pred) == len(y_true), "Data length error."
+        
+        increment = self._increment
+        for class_id in range(0, np.max(y_true), increment):
+            idxes = np.where(
+                np.logical_and(y_true >= class_id, y_true < class_id + increment)
+            )[0]
+            
+            label = "{}-{}".format(
+                str(class_id).rjust(2, "0"), str(class_id + increment - 1).rjust(2, "0")
+            )
+            print("=========", "Class Intervals:",label,"=========")
+            preds_in_task = y_pred[idxes].flatten()
+            unique, counts = np.unique(preds_in_task, return_counts=True)
+            for cls, cnt in sorted(zip(unique, counts)):
+                print(f"  class {cls:>3d}: {cnt} 个样本")
+            # with np.printoptions(threshold=np.inf):
+            #     print(res[idxes])
+            
+            # all_acc[label] = np.around(
+            #     (y_pred[idxes] == y_true[idxes]).sum() * 100 / len(idxes), decimals=2
+            # )
+        
     def _compute_accuracy(self, model, loader, old_model=None):
         model.eval()
         correct, total = 0, 0
@@ -89,7 +129,7 @@ class MoE(BaseLearner):
             np.arange(self._known_classes, self._total_classes),
             source="train",
             mode="train",
-            appendent=self._get_memory(),
+            # appendent=self._get_memory(),
         )
         self.train_loader = DataLoader(
             train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
@@ -115,6 +155,12 @@ class MoE(BaseLearner):
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
+
+        if self._cur_task > 0:
+            self._network.weight_align(self._total_classes - self._known_classes)
+    
+        
+
 
     def _train(self, train_loader, val_loader):
         self._network.to(self._device)
@@ -219,7 +265,7 @@ class MoE(BaseLearner):
             scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             val_acc, val_loss = self._compute_accuracy(self._network, val_loader)
-
+            
             
             # if epoch % 5 == 0:
             #     test_acc = self._compute_accuracy(self._network, test_loader)
@@ -258,6 +304,7 @@ class MoE(BaseLearner):
             })
             
             prog_bar.set_description(info)
+        self.visualize_logits(self._network, self.test_loader)
         logging.info(info)
         
 

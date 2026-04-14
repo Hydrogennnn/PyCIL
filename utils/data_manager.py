@@ -164,7 +164,8 @@ class DataManager(object):
             self._train_targets, self._class_order
         )
         self._test_targets = _map_new_class_index(self._test_targets, self._class_order)
-
+        self._val_targets = _map_new_class_index(self._val_targets, self._class_order)
+        
     def _select(self, x, y, low_range, high_range):
         idxes = np.where(np.logical_and(y >= low_range, y < high_range))[0]
         
@@ -213,7 +214,7 @@ class DummyDataset(Dataset):
         sample = self.data[idx]
         assert isinstance(sample, dict)
         sample = {k: torch.tensor(v) for k,v in sample.items()}
-        return self.data[idx], self.labels[idx]
+        return sample, self.labels[idx]
     
     # def __getitem__(self, idx):
     #     if self.aug == 1:
