@@ -171,7 +171,7 @@ class SparseDispatcher(object):
 class Continual_MoE(nn.Module):
     def __init__(self, ) -> None:
         super().__init__()
-        self.experts_num=32
+        self.experts_num=16
         self.register_buffer("mean", torch.tensor([0.0]))
         self.register_buffer("std", torch.tensor([1.0]))
         self.top_k = 2
@@ -184,10 +184,10 @@ class Continual_MoE(nn.Module):
         self.softmax = nn.Softmax(1)
         self.softplus = nn.Softplus()
         for _ in range(self.experts_num):  #
-            self.adaptmlp = Adapter(d_model=self.d_model, dropout=0.1, bottleneck=self.ffn_num,
+            self.adaptmlp = Adapter(d_model=self.d_model, dropout=0.5, bottleneck=self.ffn_num,
                                     init_option='lora',
                                     adapter_scalar=0.1,
-                                    adapter_layernorm_option='none',
+                                    adapter_layernorm_option='out',
                                     )
             self.adaptmlp_list.append(self.adaptmlp)
         

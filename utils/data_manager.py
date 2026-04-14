@@ -42,6 +42,8 @@ class DataManager(object):
             x, y = self._train_data, self._train_targets
         elif source == "test":
             x, y = self._test_data, self._test_targets
+        elif source == "val":
+            x, y = self._val_data, self._val_targets
         else:
             raise ValueError("Unknown data source {}.".format(source))
 
@@ -55,7 +57,7 @@ class DataManager(object):
                     *self._common_trsf,
                 ]
             )
-        elif mode == "test":
+        elif mode == "test" or mode == "val":
             trsf = transforms.Compose([*self._test_trsf, *self._common_trsf])
         else:
             raise ValueError("Unknown mode {}.".format(mode))
@@ -139,6 +141,7 @@ class DataManager(object):
         # Data
         self._train_data, self._train_targets = idata.train_data, idata.train_targets
         self._test_data, self._test_targets = idata.test_data, idata.test_targets
+        self._val_data, self._val_targets = idata.val_data, idata.val_targets
         self.use_path = False
 
         # Transforms

@@ -17,19 +17,19 @@ import wandb
 
 EPSILON = 1e-8
 
-init_epoch = 200
-init_lr = 0.1
+init_epoch = 100
+init_lr = 1e-2
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 170
-lrate = 0.1
+epochs = 100
+lrate = 1e-2
 milestones = [80, 120]
 lrate_decay = 0.1
 batch_size = 128
-weight_decay = 2e-4
+weight_decay = 1e-4
 num_workers = 8
 T = 2
 
@@ -40,6 +40,8 @@ class MoE(BaseLearner):
         self._network = MoENet(args, False)
 
     def after_task(self):
+        if self._cur_task > 0:
+            self._network.weight_align(self._total_classes - self._known_classes)
         self._old_network = self._network.copy().freeze()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
@@ -98,43 +100,49 @@ class MoE(BaseLearner):
         self.test_loader = DataLoader(
             test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
         )
+        
+        val_dataset = data_manager.get_dataset(
+            np.arange(self._known_classes, self._total_classes), source="val", mode="val"
+        )
+        
+        self.val_loader = DataLoader(
+            val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+        )
 
         if len(self._multiple_gpus) > 1:
             self._network = nn.DataParallel(self._network, self._multiple_gpus)
-        self._train(self.train_loader, self.test_loader)
+        self._train(self.train_loader, self.val_loader)
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
 
-    def _train(self, train_loader, test_loader):
+    def _train(self, train_loader, val_loader):
         self._network.to(self._device)
         if self._old_network is not None:
             self._old_network.to(self._device)
 
         if self._cur_task == 0:
-            optimizer = optim.SGD(
+            optimizer = optim.Adam(
                 self._network.parameters(),
-                momentum=0.9,
                 lr=init_lr,
                 weight_decay=init_weight_decay,
             )
             scheduler = optim.lr_scheduler.MultiStepLR(
                 optimizer=optimizer, milestones=init_milestones, gamma=init_lr_decay
             )
-            self._init_train(train_loader, test_loader, optimizer, scheduler)
+            self._init_train(train_loader, val_loader, optimizer, scheduler)
         else:
-            optimizer = optim.SGD(
+            optimizer = optim.Adam(
                 self._network.parameters(),
                 lr=lrate,
-                momentum=0.9,
                 weight_decay=weight_decay,
             )  # 1e-5
             scheduler = optim.lr_scheduler.MultiStepLR(
                 optimizer=optimizer, milestones=milestones, gamma=lrate_decay
             )
-            self._update_representation(train_loader, test_loader, optimizer, scheduler)
+            self._update_representation(train_loader, val_loader, optimizer, scheduler)
 
-    def _init_train(self, train_loader, test_loader, optimizer, scheduler):
+    def _init_train(self, train_loader, val_loader, optimizer, scheduler):
         prog_bar = tqdm(range(init_epoch))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
@@ -158,7 +166,7 @@ class MoE(BaseLearner):
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
             if epoch % 5 == 0:
-                test_acc, _ = self._compute_accuracy(self._network, test_loader)
+                test_acc, _ = self._compute_accuracy(self._network, val_loader)
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
                     self._cur_task,
                     epoch + 1,
@@ -180,7 +188,7 @@ class MoE(BaseLearner):
 
         logging.info(info)
 
-    def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
+    def _update_representation(self, train_loader, val_loader, optimizer, scheduler):
         prog_bar = tqdm(range(epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
@@ -191,14 +199,14 @@ class MoE(BaseLearner):
                 logits = self._network(inputs)["logits"]
 
                 loss_clf = F.cross_entropy(logits, targets)
-                loss_kd = _KD_loss(
-                    logits[:, : self._known_classes],
-                    self._old_network(inputs)["logits"],
-                    T,
-                )
+                # loss_kd = _KD_loss(
+                #     logits[:, : self._known_classes],
+                #     self._old_network(inputs)["logits"],
+                #     T,
+                # )
 
-                loss = loss_clf + loss_kd
-
+                # loss = loss_clf + loss_kd
+                loss = loss_clf
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -210,7 +218,7 @@ class MoE(BaseLearner):
             
             scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-            test_acc, test_loss = self._compute_accuracy(self._network, test_loader, self._old_network)
+            val_acc, val_loss = self._compute_accuracy(self._network, val_loader)
 
             
             # if epoch % 5 == 0:
@@ -233,20 +241,20 @@ class MoE(BaseLearner):
             #     )
             
             
-            info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
+            info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Val_accy {:.2f}".format(
                 self._cur_task,
                 epoch + 1,
                 epochs,
                 losses / len(train_loader),
                 train_acc,
-                test_acc,
+                val_acc,
             )
             
             wandb.log({
                 f"train/task_{self._cur_task}_acc": train_acc,
-                f"train/task_{self._cur_task}_loss" : losses,
-                f"eval/task_{self._cur_task}_acc" : test_acc,
-                f"eval/task_{self._cur_task}" : test_loss
+                f"train/task_{self._cur_task}_loss" : losses / len(train_loader),
+                f"eval/task_{self._cur_task}_acc" : val_acc,
+                f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
             })
             
             prog_bar.set_description(info)

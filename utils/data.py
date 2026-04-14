@@ -157,23 +157,33 @@ class AVE(iData):
     test_trsf = [transforms.ToTensor()]
 
     def download_data(self):
-        audio_features = np.load("./data/AVE/audio_features.npy")
-        video_features = np.load("./data/AVE/video_features.npy")
-        labels = np.load("./data/AVE/targets.npy")
+        
+        
+        data = np.load('data/AVE/ave_features.npz')
+        
+        self.train_data = [{"video": v, "audio": a} for v, a in zip(data["train_videos"], data["train_audios"])]
+        self.train_targets = data["train_targets"].astype(np.int64)
+        self.test_data = [{"video": v, "audio": a} for v, a in zip(data["test_videos"], data["test_audios"])]
+        self.test_targets = data["test_targets"].astype(np.int64)
+        self.val_data = [{"video": v, "audio": a} for v, a in zip(data["val_videos"], data["val_audios"])]
+        self.val_targets = data["val_targets"].astype(np.int64)
+        # audio_features = np.load("./data/AVE/audio_features.npy")
+        # video_features = np.load("./data/AVE/video_features.npy")
+        # labels = np.load("./data/AVE/targets.npy")
         
 
         
-        (video_train, video_test,
-        audio_train, audio_test,
-        y_train, y_test) = train_test_split(video_features, audio_features, labels, test_size=0.2,
-                                            random_state=42, shuffle=True)
-        train_size, test_size = len(y_train), len(y_test)
-        self.train_data = [{"video": video_train[i],
-                            "audio": audio_train[i]} for i in range(train_size)]
+        # (video_train, video_test,
+        # audio_train, audio_test,
+        # y_train, y_test) = train_test_split(video_features, audio_features, labels, test_size=0.2,
+        #                                     random_state=42, shuffle=True, stratify=labels)
+        # train_size, test_size = len(y_train), len(y_test)
+        # self.train_data = [{"video": video_train[i],
+        #                     "audio": audio_train[i]} for i in range(train_size)]
         
-        self.train_targets = y_train.astype(np.int64)
+        # self.train_targets = y_train.astype(np.int64)
         
-        self.test_data = [{"video": video_test[i],
-                            "audio": audio_test[i]} for i in range(test_size)]
+        # self.test_data = [{"video": video_test[i],
+        #                     "audio": audio_test[i]} for i in range(test_size)]
         
-        self.test_targets = y_test.astype(np.int64)
+        # self.test_targets = y_test.astype(np.int64)

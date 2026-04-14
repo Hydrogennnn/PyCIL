@@ -1270,18 +1270,17 @@ class MoENet(BaseNet):
     def __init__(self, args, pretrained, gradcam=False):
         super().__init__(args, pretrained)
         self.moe = Continual_MoE()
-        
+        self.ln = nn.LayerNorm(self.feature_dim)
         
     @property
     def feature_dim(self):
-        return self.moe.d_model
+        return 768 * 2
     
     def extract_vector(self, x):
         v, a = x["video"], x["audio"]
         v = self.moe(v)
         a = self.moe(a)
-        x = (v+a)/2
-        
+        x = torch.cat([v, a], dim=1)
         return x
         
     def update_fc(self, nb_classes):
@@ -1317,8 +1316,8 @@ class MoENet(BaseNet):
         v, a = x["video"], x["audio"]
         v = self.moe(v)
         a = self.moe(a)
-        x = (v+a)/2
-        
+        x = torch.cat([v, a], dim=1)
+        x = self.ln(x)
         # x = self.moe(x)
         out = self.fc(x)
         # out.update(x)
