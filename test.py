@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-
+import h5py
 
 import pickle
 
@@ -32,6 +32,20 @@ import pickle
 
 # inspect(data)
 
-a = [26,14,23,4,11,25,31,10,29,5,6,9,17,22,2,19,13,1,21,16,8,3,27,28,15,30,0,7,12,18,20,24]
+# a = [26,14,23,4,11,25,31,10,29,5,6,9,17,22,2,19,13,1,21,16,8,3,27,28,15,30,0,7,12,18,20,24]
 
-print(len(a))
+# print(len(a))
+
+# a = np.load("data/visual_pretrained_feature_dict.npy", allow_pickle=True).item()
+# for k, v in a.items():
+#     print(v.shape)
+
+
+# with h5py.File('data/KS/visual_features.h5', 'r') as f:
+#     # 查看所有 key
+#     print(f["zzyTugOJAPc"])
+    
+a = np.load("data/KS/audio_pretrained_feature_dict.npy", allow_pickle=True).item()
+print(a.keys())
+
+    # 读取某个数据集
