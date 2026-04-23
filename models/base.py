@@ -402,6 +402,7 @@ class BaseLearner(object):
         self._device = args["device"][0]
         self._multiple_gpus = args["device"]
         self._increment = args["increment"]
+        self._dataset = args["dataset"]
 
     @property
     def exemplar_size(self):

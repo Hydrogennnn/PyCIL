@@ -9,7 +9,7 @@
     "increment": 7,
     "model_name": "moe",
     "convnet_type": "resnet32",
-    "device" : ["3"],
+    "device" : ["0"],
     "seed": [1993],
     "project": "nips26"
 }

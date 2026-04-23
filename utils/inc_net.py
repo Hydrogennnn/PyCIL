@@ -1276,6 +1276,13 @@ class MoENet(BaseNet):
     def feature_dim(self):
         return 768 * 2
     
+    def get_gating(self, x):
+        v, a = x["video"], x["audio"]
+        gate_v = self.moe.get_gating(v)
+        gate_a = self.moe.get_gating(a)
+        gate = torch.cat([gate_v, gate_a], dim=0)
+        return gate
+    
     def extract_vector(self, x):
         v, a = x["video"], x["audio"]
         v = self.moe(v)

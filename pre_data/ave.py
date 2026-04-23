@@ -54,7 +54,7 @@ def preprocessAVE(anno_path):
     
     for idx, row in tqdm(anno_df.iterrows(), desc="Processing..."):
         
-        video_path = os.path.join(dataroot, "AVE", row["VideoID"]+".mp4")
+        video_path = os.path.join(dataroot, "videos", row["VideoID"]+".mp4")
         
         # 读取视频的视觉信息
         

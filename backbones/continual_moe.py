@@ -191,7 +191,12 @@ class Continual_MoE(nn.Module):
                                     )
             self.adaptmlp_list.append(self.adaptmlp)
         
-        
+    
+    def get_gating(self, x):
+        gates = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise, return_logits=True)
+        return gates
+    
+    
     def forward(self, x):
         gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
         dispatcher = SparseDispatcher(self.experts_num, gates)
@@ -211,7 +216,7 @@ class Continual_MoE(nn.Module):
         return outputs
 
     
-    def noisy_top_k_gating(self, x, train, w_gate, w_noise, noise_epsilon=1e-2):
+    def noisy_top_k_gating(self, x, train, w_gate, w_noise, noise_epsilon=1e-2, return_logits=False):
         """Noisy top-k gating.
           See paper: https://arxiv.org/abs/1701.06538.
           Args:
@@ -231,6 +236,9 @@ class Continual_MoE(nn.Module):
             logits = noisy_logits
         else:
             logits = clean_logits
+        
+        if return_logits:
+            return logits
         # calculate topk + 1 that will be needed for the noisy gates
         top_logits, top_indices = logits.topk(min(self.top_k + 1, self.experts_num), dim=1)
         top_k_logits = top_logits[:, :self.top_k]

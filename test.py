@@ -7,24 +7,24 @@ import pickle
 
 
 
-# def inspect(obj, indent=0):
-#     prefix = "  " * indent
-#     if isinstance(obj, dict):
-#         print(f"{prefix}dict  ({len(obj)} keys)")
-#         for k, v in obj.items():
-#             print(f"{prefix}  [{k}]:")
-#             inspect(v, indent + 2)
-#     elif isinstance(obj, (list, tuple)):
-#         print(f"{prefix}{type(obj).__name__}  (len={len(obj)})")
-#         for i, v in enumerate(obj[:3]):  # 只看前3个
-#             print(f"{prefix}  [{i}]:")
-#             inspect(v, indent + 2)
-#         if len(obj) > 3:
-#             print(f"{prefix}  ... ({len(obj)-3} more)")
-#     elif isinstance(obj, np.ndarray):
-#         print(f"{prefix}ndarray  shape={obj.shape}  dtype={obj.dtype}")
-#     else:
-#         print(f"{prefix}{type(obj).__name__}  = {repr(obj)[:80]}")
+def inspect(obj, indent=0):
+    prefix = "  " * indent
+    if isinstance(obj, dict):
+        print(f"{prefix}dict  ({len(obj)} keys)")
+        for k, v in obj.items():
+            print(f"{prefix}  [{k}]:")
+            inspect(v, indent + 2)
+    elif isinstance(obj, (list, tuple)):
+        print(f"{prefix}{type(obj).__name__}  (len={len(obj)})")
+        for i, v in enumerate(obj[:3]):  # 只看前3个
+            print(f"{prefix}  [{i}]:")
+            inspect(v, indent + 2)
+        if len(obj) > 3:
+            print(f"{prefix}  ... ({len(obj)-3} more)")
+    elif isinstance(obj, np.ndarray):
+        print(f"{prefix}ndarray  shape={obj.shape}  dtype={obj.dtype}")
+    else:
+        print(f"{prefix}{type(obj).__name__}  = {repr(obj)[:80]}")
 
 
 # with open("data/MOESI/mosei_senti_data.pkl", "rb") as f:
@@ -45,7 +45,9 @@ import pickle
 #     # 查看所有 key
 #     print(f["zzyTugOJAPc"])
     
-a = np.load("data/KS/audio_pretrained_feature_dict.npy", allow_pickle=True).item()
-print(a.keys())
+with open("data/KS/Kinetics400_data_tasks_10.pkl", "rb") as f:
+    data = pickle.load(f)
+    # inspect(data)
+    print(len(data['train'][0]['shuffling cards']))
 
     # 读取某个数据集
