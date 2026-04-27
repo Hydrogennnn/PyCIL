@@ -12,20 +12,22 @@ from collections import defaultdict
 import os
 from utils.toolkit import target2onehot, tensor2numpy
 import wandb
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 
 
 
 EPSILON = 1e-8
 
-init_epoch = 100
+init_epoch = 1
 init_lr = 1e-3
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 100
+epochs = 1
 lrate = 1e-3
 milestones = [80, 120]
 lrate_decay = 0.1
@@ -82,6 +84,36 @@ class MoE(BaseLearner):
             unique, counts = np.unique(preds_in_task, return_counts=True)
             for cls, cnt in sorted(zip(unique, counts)):
                 print(f"  class {cls:>3d}: {cnt} 个样本")
+            # with np.printoptions(threshold=np.inf):
+            #     print(res[idxes])
+            
+            # all_acc[label] = np.around(
+            #     (y_pred[idxes] == y_true[idxes]).sum() * 100 / len(idxes), decimals=2
+            # )
+            
+    def visualize_gating(self, model, loader):
+        model.eval()
+        all_loads = []
+        for i, (inputs, targets) in enumerate(loader):
+            inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
+            with torch.no_grad():
+                load = model.get_load(inputs)
+            all_loads.append(load)
+        
+        all_loads = torch.cat(all_loads, dim=0)
+        print(all_loads.shape)
+        # importance = all_loads.float().sum(0)
+        # cv = importance.std() / importance.mean()
+        # print("Load balance CV:", cv.item())
+        
+        
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(all_loads.cpu().numpy(), cmap="viridis")
+        plt.title("Token-Expert Routing Heatmap")
+        plt.xlabel("Expert")
+        plt.ylabel("Token")
+        plt.savefig('load.png')
+                
             # with np.printoptions(threshold=np.inf):
             #     print(res[idxes])
             
@@ -377,6 +409,7 @@ class MoE(BaseLearner):
             
             prog_bar.set_description(info)
         self.visualize_logits(self._network, self.test_loader)
+        self.visualize_gating(self._network, self.test_loader)
         logging.info(info)
         
 

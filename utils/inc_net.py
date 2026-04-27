@@ -1283,6 +1283,13 @@ class MoENet(BaseNet):
         gate = torch.cat([gate_v, gate_a], dim=0)
         return gate
     
+    def get_load(self, x):
+        v, a = x["video"], x["audio"]
+        load_v = self.moe.get_load(v)
+        load_a = self.moe.get_load(a)
+        load = torch.cat([load_v, load_a], dim=0)
+        return load
+    
     def extract_vector(self, x):
         v, a = x["video"], x["audio"]
         v = self.moe(v)

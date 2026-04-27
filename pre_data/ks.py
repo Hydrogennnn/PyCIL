@@ -138,7 +138,7 @@ if __name__ == '__main__':
     test_v, test_a, test_y = preprocessAVE(os.path.join(dataroot, "testSet.txt"), image_processor, video_model, audio_model, device)
     val_v, val_a, val_y = preprocessAVE(os.path.join(dataroot, "valSet.txt"), image_processor, video_model, audio_model, device)
 
-    np.savez(os.path.join(dataroot, 'ave_features.npz'),
+    np.savez(os.path.join(dataroot, 'seq_ave_features.npz'),
              train_videos=train_v, train_audios=train_a, train_targets=train_y,
              test_videos=test_v, test_audios=test_a, test_targets=test_y,
              val_videos=val_v, val_audios=val_a, val_targets=val_y)

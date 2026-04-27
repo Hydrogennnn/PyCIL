@@ -196,6 +196,9 @@ class Continual_MoE(nn.Module):
         gates = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise, return_logits=True)
         return gates
     
+    def get_load(self, x):
+        gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
+        return load
     
     def forward(self, x):
         gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
