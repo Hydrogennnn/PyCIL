@@ -39,11 +39,12 @@ class Adapter(nn.Module):
         if init_option == "bert":
             raise NotImplementedError
         elif init_option == "lora":
-            with torch.no_grad():
-                nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
-                nn.init.zeros_(self.up_proj.weight)
-                nn.init.zeros_(self.down_proj.bias)
-                nn.init.zeros_(self.up_proj.bias)
+            pass
+            # with torch.no_grad():
+            #     nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
+            #     nn.init.zeros_(self.up_proj.weight)
+            #     nn.init.zeros_(self.down_proj.bias)
+            #     nn.init.zeros_(self.up_proj.bias)
 
     def forward(self, x, add_residual=True, residual=None):
 
@@ -200,7 +201,7 @@ class Continual_MoE(nn.Module):
         gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
         return load
     
-    def forward(self, x):
+    def forward(self, x, return_load=False):
         gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
         dispatcher = SparseDispatcher(self.experts_num, gates)
         expert_inputs = dispatcher.dispatch(x)  # list of [n_i, d_model]，n_i 为分配到第i个专家的样本数
@@ -215,8 +216,10 @@ class Continual_MoE(nn.Module):
             # 按 gates 权重合并回完整 batch
         outputs = dispatcher.combine(expert_outputs)
         # y: [batch_size, d]
-        
-        return outputs
+        if return_load:
+            return outputs, load
+        else:
+            return outputs
 
     
     def noisy_top_k_gating(self, x, train, w_gate, w_noise, noise_epsilon=1e-2, return_logits=False):

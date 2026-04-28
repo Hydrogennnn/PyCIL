@@ -1287,7 +1287,7 @@ class MoENet(BaseNet):
         v, a = x["video"], x["audio"]
         load_v = self.moe.get_load(v)
         load_a = self.moe.get_load(a)
-        load = torch.cat([load_v, load_a], dim=0)
+        load = torch.stack([load_v, load_a], dim=0)
         return load
     
     def extract_vector(self, x):

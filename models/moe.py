@@ -20,14 +20,14 @@ import matplotlib.pyplot as plt
 
 EPSILON = 1e-8
 
-init_epoch = 1
+init_epoch = 100
 init_lr = 1e-3
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 1
+epochs = 100
 lrate = 1e-3
 milestones = [80, 120]
 lrate_decay = 0.1
@@ -101,7 +101,7 @@ class MoE(BaseLearner):
             all_loads.append(load)
         
         all_loads = torch.cat(all_loads, dim=0)
-        print(all_loads.shape)
+        
         # importance = all_loads.float().sum(0)
         # cv = importance.std() / importance.mean()
         # print("Load balance CV:", cv.item())
@@ -112,7 +112,7 @@ class MoE(BaseLearner):
         plt.title("Token-Expert Routing Heatmap")
         plt.xlabel("Expert")
         plt.ylabel("Token")
-        plt.savefig('load.png')
+        plt.savefig(os.path.join(f"save/{self._dataset}",f'load_{self._cur_task}.png'))
                 
             # with np.printoptions(threshold=np.inf):
             #     print(res[idxes])

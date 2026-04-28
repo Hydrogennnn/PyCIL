@@ -13,7 +13,7 @@ import timm
 
 num_frames = 16
 dataroot = "data/AVE"
-BATCH_SIZE = 8  # 根据显存调整
+BATCH_SIZE = 64 # 根据显存调整
 
 
 def load_visual_frames(video_path):
@@ -74,7 +74,7 @@ def process_batch_video(frames_list, image_processor, video_model, device):
     with torch.no_grad():
         output = video_model(video_inputs).last_hidden_state
     # [B, 1568, 768] → mean → [B, 768]
-    return output.mean(dim=1).cpu().numpy()
+    return output.cpu().numpy()
 
 
 def process_batch_audio(fbank_list, audio_model, device):
@@ -82,9 +82,10 @@ def process_batch_audio(fbank_list, audio_model, device):
     # stack → [B, 1, 1024, 128]
     batch = torch.stack(fbank_list, dim=0).to(device)
     with torch.no_grad():
-        out = audio_model(batch).cpu().numpy()
-    # shape: [B, feat_dim]
-    return out
+        out = audio_model.forward_features(batch).cpu().numpy()
+    patch_tokens = out[:, 1:, :]
+    # shape: [B, patch_size, feat_dim]
+    return patch_tokens
 
 
 def preprocessAVE(anno_path, image_processor, video_model, audio_model, device):
@@ -100,7 +101,8 @@ def preprocessAVE(anno_path, image_processor, video_model, audio_model, device):
 
     # 按 batch 处理
     rows = list(anno_df.iterrows())
-    for batch_start in tqdm(range(0, len(rows), BATCH_SIZE), desc="Processing batches"):
+    for batch_start in tqdm(range(0, len(rows), BATCH_SIZE)):
+    # for batch_start in tqdm(range(0, 2, BATCH_SIZE)):
         batch_rows = rows[batch_start: batch_start + BATCH_SIZE]
 
         frames_batch = []
@@ -115,12 +117,12 @@ def preprocessAVE(anno_path, image_processor, video_model, audio_model, device):
         video_feats = process_batch_video(frames_batch, image_processor, video_model, device)
         audio_feats = process_batch_audio(fbank_batch, audio_model, device)
 
-        for vf in video_feats:
-            video_features_list.append(vf)
-        for af in audio_feats:
-            audio_features_list.append(af)
+        # for vf in video_feats:
+        video_features_list.append(video_feats)
+        # for af in audio_feats:
+        audio_features_list.append(audio_feats)
 
-    return np.stack(video_features_list), np.stack(audio_features_list), labels
+    return np.concatenate(video_features_list, axis=0), np.concatenate(audio_features_list, axis=0), labels
 
 
 if __name__ == '__main__':
