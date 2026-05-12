@@ -94,21 +94,34 @@ class MoE(BaseLearner):
     def visualize_gating(self, model, loader):
         model.eval()
         all_loads = []
+        y_true = []
         for i, (inputs, targets) in enumerate(loader):
             inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
             with torch.no_grad():
                 load = model.get_load(inputs)
-            all_loads.append(load)
+            all_loads.append(load.cpu().numpy())
+            y_true.append(targets.cpu().numpy())
         
-        all_loads = torch.cat(all_loads, dim=0)
+        all_loads = np.concatenate(all_loads)
+        y_true = np.concatenate(y_true)
+        increment = self._increment
         
-        # importance = all_loads.float().sum(0)
-        # cv = importance.std() / importance.mean()
-        # print("Load balance CV:", cv.item())
+        
+        loads_per_task = []
+        for class_id in range(0, self._total_classes, increment):
+            idxes = np.where(
+                np.logical_and(y_true >= class_id, y_true < class_id + increment)
+            )[0]
+            load_cur_task = all_loads[idxes].sum(0)
+            loads_per_task.append(load_cur_task)
+        
+        loads_per_task = np.stack(loads_per_task)
+        # print(loads_per_task.shape)
+        
         
         
         plt.figure(figsize=(8, 6))
-        sns.heatmap(all_loads.cpu().numpy(), cmap="viridis")
+        sns.heatmap(loads_per_task, cmap="viridis")
         plt.title("Token-Expert Routing Heatmap")
         plt.xlabel("Expert")
         plt.ylabel("Token")
@@ -170,11 +183,9 @@ class MoE(BaseLearner):
         loss_route_kd = 0.0
         idxes = torch.where(targets < self._known_classes)[0]
         if self._old_network is not None and len(idxes)!= 0:
-            
-            
             inputs = {k:v[idxes] for k,v in inputs.items()}
+            route_score= self._network.get_gating(inputs)
             with torch.no_grad():
-                route_score= self._network.get_gating(inputs)
                 old_route_score = self._old_network.get_gating(inputs)
                 
             log_route_score = F.log_softmax(route_score, dim=-1)
@@ -190,7 +201,7 @@ class MoE(BaseLearner):
                 # print("old_route_score nan:", old_route_score.isnan().any().item())
                 # print("route_score range:", route_score.min().item(), route_score.max().item())
                 # print("idxes len:", len(idxes))
-        loss = loss_clf + 0.5*loss_KD
+        loss = loss_clf + 0.5*loss_KD + loss_route_kd
         
         
         details["CE_loss"] = loss_clf.item()

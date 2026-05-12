@@ -159,7 +159,7 @@ class AVE(iData):
     def download_data(self):
         
         
-        data = np.load('data/AVE/ave_features.npz')
+        data = np.load('data/AVE/seq_ave_features.npz')
         
         self.train_data = [{"video": v, "audio": a} for v, a in zip(data["train_videos"], data["train_audios"])]
         self.train_targets = data["train_targets"].astype(np.int64)

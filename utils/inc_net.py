@@ -1274,28 +1274,30 @@ class MoENet(BaseNet):
         
     @property
     def feature_dim(self):
-        return 768 * 2
+        return 768
     
     def get_gating(self, x):
         v, a = x["video"], x["audio"]
-        gate_v = self.moe.get_gating(v)
-        gate_a = self.moe.get_gating(a)
-        gate = torch.cat([gate_v, gate_a], dim=0)
+        x = torch.cat([v,a], dim=1)
+        B, seq_len, d = x.shape
+        gate = self.moe.get_gating(x.view(B*seq_len, -1))
         return gate
     
     def get_load(self, x):
         v, a = x["video"], x["audio"]
-        load_v = self.moe.get_load(v)
-        load_a = self.moe.get_load(a)
-        load = torch.stack([load_v, load_a], dim=0)
+        x = torch.cat([v,a], dim=1)
+        B, seq_len, d = x.shape
+        load = self.moe.get_load(x.view(B*seq_len, -1)).view(B, seq_len, -1)
+        load = torch.sum(load, dim=1)
         return load
     
     def extract_vector(self, x):
         v, a = x["video"], x["audio"]
-        v = self.moe(v)
-        a = self.moe(a)
-        x = torch.cat([v, a], dim=1)
+        x = torch.cat([v,a], dim=1)
+        B, seq_len, d = x.shape
+        x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
         x = self.ln(x)
+        x = torch.mean(x, dim=1)
         return x
         
     def update_fc(self, nb_classes):
@@ -1329,10 +1331,13 @@ class MoENet(BaseNet):
 
     def forward(self, x):
         v, a = x["video"], x["audio"]
-        v = self.moe(v)
-        a = self.moe(a)
-        x = torch.cat([v, a], dim=1)
+        x = torch.cat([v,a], dim=1)
+        B, seq_len, d = x.shape
+        x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
         x = self.ln(x)
+        x = torch.mean(x, dim=1)
+        
+        
         # x = self.moe(x)
         out = self.fc(x)
         # out.update(x)

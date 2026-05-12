@@ -103,7 +103,7 @@ class SparseDispatcher(object):
     def __init__(self, num_experts, gates):
         """Create a SparseDispatcher."""
 
-        self._gates = gates
+        self._gates = gates # [B, num_experts]
         self._num_experts = num_experts
 
         sorted_experts, index_sorted_experts = torch.nonzero(gates).sort(0)
@@ -266,7 +266,7 @@ class Continual_MoE(nn.Module):
         Returns:
         a float32 `Tensor` of shape [n]
         """
-        return (gates > 0).sum(0)
+        return (gates > 0).float()
     
     
     def _prob_in_top_k(self, clean_values, noisy_values, noise_stddev, noisy_top_values):

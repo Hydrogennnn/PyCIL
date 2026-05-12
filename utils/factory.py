@@ -3,7 +3,8 @@ def get_model(model_name, args):
     if name == "moe":
         from models.moe import MoE
         return MoE(args)
-    return None
+    else:
+        assert 0
     # if name == "icarl":
     #     from models.icarl import iCaRL
     #     return iCaRL(args)
