@@ -173,8 +173,8 @@ class MoE(BaseLearner):
                 start = t * self._increment
                 end = (t + 1) * self._increment
 
-                soft_target = F.softmax(logits[:, start:end] / T, dim=1)
-                output_log = F.log_softmax(old_logits[:, start:end] / T, dim=1)
+                output_log = F.log_softmax(logits[:, start:end] / T, dim=1)
+                soft_target = F.softmax(old_logits[:, start:end] / T, dim=1)
                 loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (T**2)
             loss_KD = loss_KD.sum()
             details["KD_loss"] = loss_KD.item()
