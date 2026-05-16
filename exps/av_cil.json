@@ -1,0 +1,16 @@
+{
+    "prefix": "reproduce",
+    "dataset": "ave",
+    "memory_size": 340,
+    "memory_per_class": 20,
+    "fixed_memory": true,
+    "shuffle": true,
+    "init_cls": 7,
+    "increment": 7,
+    "model_name": "AV-CIL",
+    "convnet_type": "resnet32",
+    "device" : ["0"],
+    "seed": [1993],
+    "project": "nips26"
+}
+
