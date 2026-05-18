@@ -151,6 +151,7 @@ def preprocessAVE(anno_path):
         audio.close()
         video.close()
         
+
         audio_features_list.append(out)
         
         # print(f"处理完成: {row['VideoID']}")

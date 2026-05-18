@@ -82,10 +82,8 @@ def process_batch_audio(fbank_list, audio_model, device):
     # stack → [B, 1, 1024, 128]
     batch = torch.stack(fbank_list, dim=0).to(device)
     with torch.no_grad():
-        out = audio_model.forward_features(batch).cpu().numpy()
-    patch_tokens = out[:, 1:, :]
-    # shape: [B, patch_size, feat_dim]
-    return patch_tokens
+        out = audio_model(batch).cpu().numpy()
+    return out
 
 
 def preprocessAVE(anno_path, image_processor, video_model, audio_model, device):
@@ -140,7 +138,7 @@ if __name__ == '__main__':
     test_v, test_a, test_y = preprocessAVE(os.path.join(dataroot, "testSet.txt"), image_processor, video_model, audio_model, device)
     val_v, val_a, val_y = preprocessAVE(os.path.join(dataroot, "valSet.txt"), image_processor, video_model, audio_model, device)
 
-    np.savez(os.path.join(dataroot, 'seq_ave_features.npz'),
+    np.savez(os.path.join(dataroot, 'avcil_features.npz'),
              train_videos=train_v, train_audios=train_a, train_targets=train_y,
              test_videos=test_v, test_audios=test_a, test_targets=test_y,
              val_videos=val_v, val_audios=val_a, val_targets=val_y)

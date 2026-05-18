@@ -7,7 +7,7 @@ from torch import optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from models.base import BaseLearner
-from utils.inc_net import MoENet
+from utils.inc_net import AV_CIL_Net
 from collections import defaultdict
 import os
 from utils.toolkit import target2onehot, tensor2numpy
@@ -30,7 +30,7 @@ init_weight_decay = 0.0005
 
 epochs = 200
 lrate = 1e-4
-milestones = [80, 120]
+milestones = 100
 lrate_decay = 0.1
 batch_size = 256
 weight_decay = 1e-4
@@ -44,7 +44,7 @@ class_contrastive_temperature = 0.05
 class AVCIL(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
-        self._network = AVCIL_NET(args, False)
+        self._network = AV_CIL_Net(args, False)
 
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
@@ -98,42 +98,112 @@ class AVCIL(BaseLearner):
     
     def _compute_accuracy(self, model, loader, old_model=None):
         model.eval()
+
+
         correct, total = 0, 0
         test_losses = 0.0
         for i, (inputs, targets) in enumerate(loader):
             inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
             with torch.no_grad():
-                loss, details = self.get_loss(inputs, targets)
-                # for k,v in details.items():
-                #     if 'loss' in k:
-                #         print(k, v)
                 outputs = model(inputs)["logits"]
             predicts = torch.max(outputs, dim=1)[1]
             correct += (predicts == targets).sum()
             total += len(targets)
             
-            test_losses += loss.item()
+            # test_losses += loss.item()
 
-        return np.around(tensor2numpy(correct) * 100 / total, decimals=2), test_losses / len(loader)
+        return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
     
     
-    
-    def get_loss(self, inputs, targets):
+    def get_loss(self, data, labels, exemplar_data, exemplar_labels):
         details = {}
-        logits = self._network(inputs)["logits"]
-        loss_clf = F.cross_entropy(logits, targets)
+        data_batch_size = labels.shape[0]
+        exemplar_data_batch_size = exemplar_labels.shape[0]
 
+        visual = data["video"]
+        audio = data["audio"]
+        exemplar_visual = exemplar_data["video"]
+        exemplar_audio = exemplar_data["audio"]
+
+        total_visual = torch.cat((visual, exemplar_visual))
+        total_audio = torch.cat((audio, exemplar_audio))
+        total_visual = total_visual.to(self._device)
+        total_audio = total_audio.to(self._device)
+
+        inputs = {"video", total_visual,
+                  "audio", total_audio}
+        outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
+        out = outputs["logits"]
+        audio_feature = outputs["audio_feature"]
+        visual_feature = outputs["visual_feature"]
+        spatial_attn_score = outputs["spatial_attn_score"]
+        temporal_attn_score = outputs["temporal_attn_score"]
         
-        out, audio_feature, visual_feature, spatial_attn_score, temporal_attn_score = \
-            self._network(visual=total_visual, audio=total_audio, out_feature_before_fusion=True, out_attn_score=True)
+        # out, audio_feature, visual_feature, spatial_attn_score, temporal_attn_score = self._network(visual=total_visual, audio=total_audio, out_feature_before_fusion=True, out_attn_score=True)
         with torch.no_grad():
-            old_out, old_spatial_attn_score, old_temporal_attn_score = self._old_network(visual=total_visual, audio=total_audio, out_attn_score=True)
-            old_out = old_out.detach()
+            old_outputs = self._network(inputs, out_attn_score=True)
+            old_out, old_spatial_attn_score, old_temporal_attn_score = old_outputs["logits"], old_outputs["spatial_attn_score"], old_outputs["temporal_attn_score"]
             old_spatial_attn_score = old_spatial_attn_score.detach()
             old_temporal_attn_score = old_temporal_attn_score.detach()
-        instance_contra_loss = self.cal_contrastive_loss(audio_feature, visual_feature, temperature=args.instance_contrastive_temperature)
 
-        return loss, details
+        # if args.instance_contrastive:
+        instance_contra_loss = self.cal_contrastive_loss(audio_feature, visual_feature, temperature=instance_contrastive_temperature)
+                
+        # if args.class_contrastive:
+        all_labels = torch.cat((labels, exemplar_labels))
+        class_contra_loss = self.class_contrastive_loss(audio_feature, visual_feature, all_labels, temperature=class_contrastive_temperature)
+        
+        # if args.attn_score_distil:
+        exem_spatial_attn_score = spatial_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(2, 3)
+        exem_spatial_attn_score = exem_spatial_attn_score.reshape(-1, exem_spatial_attn_score.shape[-1])
+
+        exem_old_spatial_attn_score = old_spatial_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(2, 3)
+        exem_old_spatial_attn_score = exem_old_spatial_attn_score.reshape(-1, exem_old_spatial_attn_score.shape[-1])
+
+        exem_temporal_attn_score = temporal_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(1, 2)
+        exem_temporal_attn_score = exem_temporal_attn_score.reshape(-1, exem_temporal_attn_score.shape[-1])
+
+        exem_old_temporal_attn_score = old_temporal_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(1, 2)
+        exem_old_temporal_attn_score = exem_old_temporal_attn_score.reshape(-1, exem_old_temporal_attn_score.shape[-1])
+
+        spatial_attn_dist_loss = F.kl_div(exem_spatial_attn_score.log(), exem_old_spatial_attn_score, reduction='sum') / exemplar_data_batch_size
+        temporal_attn_dist_loss = F.kl_div(exem_temporal_attn_score.log(), exem_old_temporal_attn_score, reduction='sum') / exemplar_data_batch_size
+
+
+        last_step_out_class_num = self._known_classes
+        class_num_per_step = self._increment
+        old_out = old_out[:,:last_step_out_class_num]
+        
+        curr_out = out[:data_batch_size, last_step_out_class_num:]
+        loss_curr = self.CE_loss(class_num_per_step, curr_out, labels)
+
+        prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
+        loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
+
+        loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+
+        # if self._dataset == 'AVE' and args.class_num_per_step == 4 and step == 1:
+        #     loss_CE = CE_loss(args.class_num_per_step + last_step_out_class_num, out, torch.cat((labels, exemplar_labels)))
+
+        loss_KD = torch.zeros(self._cur_task).to(self._device)
+        
+        for t in range(self._cur_task):
+            start = t * class_num_per_step
+            end = (t + 1) * class_num_per_step
+
+            soft_target = F.softmax(old_out[:, start:end] / T, dim=1)
+            output_log = F.log_softmax(out[:, start:end] / T, dim=1)
+            loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (T**2)
+        loss_KD = loss_KD.sum()
+        loss = loss_CE + loss_KD
+        # if args.instance_contrastive:
+        loss += 0.5 * instance_contra_loss
+        # if args.class_contrastive:
+        loss += 1.0* class_contra_loss
+        # if args.attn_score_distil:
+        loss += 0.5 * spatial_attn_dist_loss + (1 - 0.5) * temporal_attn_dist_loss
+
+        return loss
     
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -189,9 +259,6 @@ class AVCIL(BaseLearner):
             self.mem_loader = DataLoader(
                 mem_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
             )
-            
-            
-        
 
         if len(self._multiple_gpus) > 1:
             self._network = nn.DataParallel(self._network, self._multiple_gpus)
@@ -261,7 +328,7 @@ class AVCIL(BaseLearner):
                 weight_decay=weight_decay,
             )  # 1e-5
             scheduler = optim.lr_scheduler.MultiStepLR(
-                optimizer=optimizer, milestones=milestones, gamma=lrate_decay
+                optimizer=optimizer, milestones=[milestones], gamma=lrate_decay
             )
             self._update_representation(train_loader, val_loader, optimizer, scheduler)
 
@@ -275,7 +342,7 @@ class AVCIL(BaseLearner):
             for i, (inputs, targets) in enumerate(train_loader):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
                 # logits = self._network(inputs)["logits"]
-                logits = self._network(visual=visual, audio=audio, out_feature_before_fusion=True)
+                logits = self._network(inputs)["logits"]
 
                 loss = F.cross_entropy(logits, targets)
                 optimizer.zero_grad()
@@ -321,9 +388,6 @@ class AVCIL(BaseLearner):
         logging.info(info)
 
     def _update_representation(self, train_loader, val_loader, optimizer, scheduler):
-        
-        
-        
         # prog_bar = tqdm(range(epochs))
         best_acc = -1e9
         for _, epoch in enumerate(range(epochs)):
@@ -337,59 +401,38 @@ class AVCIL(BaseLearner):
                 labels = labels.to(self._device)
                 exemplar_data, exemplar_labels = prev
                 exemplar_labels = exemplar_labels.to(self._device)
-                
-                data_batch_size = labels.shape[0]
-                exemplar_data_batch_size = exemplar_labels.shape[0]
-                复现到这里。。。。。。。
-                inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
-                loss, details = self.get_loss(inputs, targets)
+                loss = self.get_loss(data, labels, exemplar_data, exemplar_labels)
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                # losses += loss.item()
-                for k, v in details.items():
-                    if 'loss' not in k:
-                        continue
-                    loss_details[k] += v
-                logits = details['logits']
-                _, preds = torch.max(logits, dim=1)
-                correct += preds.eq(targets.expand_as(preds)).cpu().sum()
-                total += len(targets)
+                loss_details['tot_loss'] += loss.items()
             
             scheduler.step()
-            train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
-            val_acc, val_loss = self._compute_accuracy(self._network, val_loader)
+            # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+            val_acc = self._compute_accuracy(self._network, val_loader)
             
             if val_acc > best_acc:
                 save_dir = os.path.join("save", self._dataset)
                 os.makedirs(save_dir, exist_ok=True)
-                save_path = os.path.join(save_dir, 'task_{}_best_model.pkl'.format(self._cur_task))
+                save_path = os.path.join(save_dir, 'av_cil_task_{}_best_model.pkl'.format(self._cur_task))
                 torch.save(self._network, save_path)
                 best_acc = val_acc
                 print(f"save best model at epoch {epoch} with acc {val_acc}")
-            
-            info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Val_accy {:.2f}".format(
-                self._cur_task,
-                epoch + 1,
-                epochs,
-                loss_details['tot_loss'] / len(train_loader),
-                train_acc,
-                val_acc,
-            )
+
             wandb.log({
-                f"train/task_{self._cur_task}_acc": train_acc,
+                # f"train/task_{self._cur_task}_acc": train_acc,
                 f"train/task_{self._cur_task}_loss" : loss_details['tot_loss'] / len(train_loader),
-                f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
-                f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
-                f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
+                # f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
+                # f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
+                # f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
                 f"eval/task_{self._cur_task}_acc" : val_acc,
-                f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
+                # f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
             })
             
-            prog_bar.set_description(info)
-        self.visualize_logits(self._network, self.test_loader)
-        logging.info(info)
+            # prog_bar.set_description(info)
+        # self.visualize_logits(self._network, self.test_loader)
+        # logging.info(info)
         
 
 
@@ -397,3 +440,13 @@ def _KD_loss(pred, soft, T):
     pred = torch.log_softmax(pred / T, dim=1)
     soft = torch.softmax(soft / T, dim=1)
     return -1 * torch.mul(soft, pred).sum() / pred.shape[0]
+
+
+def adjust_learning_rate(optimizer, epoch):
+    miles_list = np.array(milestones) - 1
+    if epoch in miles_list:
+        current_lr = optimizer.param_groups[0]['lr']
+        new_lr = current_lr * 0.1
+        print('Reduce lr from {} to {}'.format(current_lr, new_lr))
+        for param_group in optimizer.param_groups: 
+            param_group['lr'] = new_lr
