@@ -1415,7 +1415,7 @@ class AV_CIL_Net(BaseNet):
         visual_feature = F.relu(self.visual_proj(visual_pooled_feature))
         audio_visual_features = visual_feature + audio_feature
         
-        logits = self.fc(audio_visual_features)
+        logits = self.fc(audio_visual_features)["logits"]
         outputs = {}
         # if AFC_train_out:
         #     audio_feature.retain_grad()
@@ -1440,10 +1440,7 @@ class AV_CIL_Net(BaseNet):
         if out_attn_score:
             outputs["spatial_attn_score"] = spatial_attn_score
             outputs["temporal_attn_score"] = temporal_attn_score
-        if len(outputs) == 1:
-            return outputs[0]
-        else:
-            return outputs
+        return outputs
 
 
 

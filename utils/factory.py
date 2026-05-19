@@ -3,6 +3,9 @@ def get_model(model_name, args):
     if name == "moe":
         from models.moe import MoE
         return MoE(args)
+    if name == 'avcil':
+        from models.av_cil import AVCIL
+        return AVCIL(args)
     else:
         assert 0
     # if name == "icarl":

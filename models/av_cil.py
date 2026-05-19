@@ -21,14 +21,14 @@ from tqdm.contrib import tzip
 
 EPSILON = 1e-8
 
-init_epoch = 200
+init_epoch = 1
 init_lr = 1e-4
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 200
+epochs = 1
 lrate = 1e-4
 milestones = 100
 lrate_decay = 0.1
@@ -130,8 +130,8 @@ class AVCIL(BaseLearner):
         total_visual = total_visual.to(self._device)
         total_audio = total_audio.to(self._device)
 
-        inputs = {"video", total_visual,
-                  "audio", total_audio}
+        inputs = {"video": total_visual,
+                  "audio": total_audio}
         outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
         out = outputs["logits"]
         audio_feature = outputs["audio_feature"]
@@ -224,15 +224,16 @@ class AVCIL(BaseLearner):
         self.train_loader = DataLoader(
             train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
         )
-        mem_set = data_manager.get_dataset(
-            [],
-            source='train',
-            mode='train',
-            appendent=self._get_memory()
-        )
-        self.mem_loader = DataLoader(
-            mem_set, batch_size=batch_size, shuffle=True, num_workers=num_workers
-        )
+        if self._cur_task > 0:
+            mem_set = data_manager.get_dataset(
+                [],
+                source='train',
+                mode='train',
+                appendent=self._get_memory()
+            )
+            self.mem_loader = DataLoader(
+                mem_set, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            )
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
         )
@@ -282,7 +283,7 @@ class AVCIL(BaseLearner):
         return loss
     
     def CE_loss(self, num_classes, logits, label):
-        targets = F.one_hot(label, num_classes=self._total_classes)
+        targets = F.one_hot(label, num_classes=num_classes)
         loss = -torch.mean(torch.sum(F.log_softmax(logits, dim=-1) * targets, dim=1))
 
         return loss
@@ -343,7 +344,6 @@ class AVCIL(BaseLearner):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
                 # logits = self._network(inputs)["logits"]
                 logits = self._network(inputs)["logits"]
-
                 loss = F.cross_entropy(logits, targets)
                 optimizer.zero_grad()
                 loss.backward()
@@ -358,7 +358,7 @@ class AVCIL(BaseLearner):
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
             if epoch % 5 == 0:
-                val_acc, _ = self._compute_accuracy(self._network, val_loader)
+                val_acc = self._compute_accuracy(self._network, val_loader)
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
                     self._cur_task,
                     epoch + 1,
@@ -408,7 +408,7 @@ class AVCIL(BaseLearner):
                 optimizer.step()
                 loss_details['tot_loss'] += loss.items()
             
-            scheduler.step()
+            adjust_learning_rate(optimizer, epoch)
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             val_acc = self._compute_accuracy(self._network, val_loader)
             

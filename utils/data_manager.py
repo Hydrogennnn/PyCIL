@@ -79,7 +79,7 @@ class DataManager(object):
             appendent_data, appendent_targets = appendent
             data.append(appendent_data)
             targets.append(appendent_targets)
-
+            
         data, targets = np.concatenate(data), np.concatenate(targets)
 
         if ret_data:

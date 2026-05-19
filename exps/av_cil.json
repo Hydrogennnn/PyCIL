@@ -7,7 +7,7 @@
     "shuffle": true,
     "init_cls": 7,
     "increment": 7,
-    "model_name": "AV-CIL",
+    "model_name": "avcil",
     "convnet_type": "resnet32",
     "device" : ["0"],
     "seed": [1993],
