@@ -48,7 +48,7 @@ class AVCIL(BaseLearner):
 
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
-        self._old_network = torch.load('save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task))
+        self._old_network = torch.load('save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task))
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
         
@@ -141,7 +141,7 @@ class AVCIL(BaseLearner):
         
         # out, audio_feature, visual_feature, spatial_attn_score, temporal_attn_score = self._network(visual=total_visual, audio=total_audio, out_feature_before_fusion=True, out_attn_score=True)
         with torch.no_grad():
-            old_outputs = self._network(inputs, out_attn_score=True)
+            old_outputs = self._old_network(inputs, out_attn_score=True)
             old_out, old_spatial_attn_score, old_temporal_attn_score = old_outputs["logits"], old_outputs["spatial_attn_score"], old_outputs["temporal_attn_score"]
             old_spatial_attn_score = old_spatial_attn_score.detach()
             old_temporal_attn_score = old_temporal_attn_score.detach()
@@ -175,7 +175,8 @@ class AVCIL(BaseLearner):
         old_out = old_out[:,:last_step_out_class_num]
         
         curr_out = out[:data_batch_size, last_step_out_class_num:]
-        loss_curr = self.CE_loss(class_num_per_step, curr_out, labels)
+        curr_labels = labels - last_step_out_class_num
+        loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
 
         prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
         loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
@@ -264,7 +265,7 @@ class AVCIL(BaseLearner):
         if len(self._multiple_gpus) > 1:
             self._network = nn.DataParallel(self._network, self._multiple_gpus)
         self._train(self.train_loader, self.val_loader)
-        self._network = torch.load('save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task))
+        self._network = torch.load('save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task))
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
@@ -283,6 +284,12 @@ class AVCIL(BaseLearner):
         return loss
     
     def CE_loss(self, num_classes, logits, label):
+        if torch.any(label < 0) or torch.any(label >= num_classes):
+            raise ValueError(
+                "label out of range for CE_loss: "
+                f"num_classes={num_classes}, "
+                f"label_min={label.min().item()}, label_max={label.max().item()}"
+            )
         targets = F.one_hot(label, num_classes=num_classes)
         loss = -torch.mean(torch.sum(F.log_softmax(logits, dim=-1) * targets, dim=1))
 
@@ -370,7 +377,7 @@ class AVCIL(BaseLearner):
                 if val_acc > best_acc:
                     save_dir = os.path.join("save", self._dataset)
                     os.makedirs(save_dir, exist_ok=True)
-                    save_path = os.path.join(save_dir, 'task_{}_best_model.pkl'.format(self._cur_task))
+                    save_path = os.path.join(save_dir, 'av_cil_task_{}_best_model.pkl'.format(self._cur_task))
                     torch.save(self._network, save_path)
                     best_acc = val_acc
                     print(f"save best model at epoch {epoch}")
@@ -406,7 +413,7 @@ class AVCIL(BaseLearner):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                loss_details['tot_loss'] += loss.items()
+                loss_details['tot_loss'] += loss.item()
             
             adjust_learning_rate(optimizer, epoch)
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
