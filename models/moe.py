@@ -11,6 +11,7 @@ from utils.inc_net import MoENet
 from collections import defaultdict
 import os
 from utils.toolkit import target2onehot, tensor2numpy
+from utils import ddp
 import wandb
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -44,7 +45,10 @@ class MoE(BaseLearner):
 
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
-        self._old_network = torch.load('save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task))
+        self._old_network = torch.load(
+            'save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+            map_location=self._device,
+        )
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
         
@@ -98,7 +102,7 @@ class MoE(BaseLearner):
         for i, (inputs, targets) in enumerate(loader):
             inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
             with torch.no_grad():
-                load = model.get_load(inputs)
+                load = ddp.unwrap_model(model).get_load(inputs)
             all_loads.append(load.cpu().numpy())
             y_true.append(targets.cpu().numpy())
         
@@ -184,7 +188,7 @@ class MoE(BaseLearner):
         idxes = torch.where(targets < self._known_classes)[0]
         if self._old_network is not None and len(idxes)!= 0:
             inputs = {k:v[idxes] for k,v in inputs.items()}
-            route_score= self._network.get_gating(inputs)
+            route_score= ddp.unwrap_model(self._network).get_gating(inputs)
             with torch.no_grad():
                 old_route_score = self._old_network.get_gating(inputs)
                 
@@ -226,8 +230,13 @@ class MoE(BaseLearner):
             mode="train",
             appendent=self._get_memory(),
         )
+        train_sampler = ddp.make_sampler(train_dataset, shuffle=True)
         self.train_loader = DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=train_sampler is None,
+            sampler=train_sampler,
+            num_workers=num_workers,
         )
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
@@ -259,13 +268,15 @@ class MoE(BaseLearner):
             
         
 
-        if len(self._multiple_gpus) > 1:
-            self._network = nn.DataParallel(self._network, self._multiple_gpus)
+        self._network = ddp.wrap_model(self._network, self._device, self.args)
         self._train(self.train_loader, self.val_loader)
-        self._network = torch.load('save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task))
+        self._network = ddp.unwrap_model(self._network)
+        ddp.barrier()
+        self._network = torch.load(
+            'save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+            map_location=self._device,
+        )
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
-        if len(self._multiple_gpus) > 1:
-            self._network = self._network.module
 
         if self._cur_task > 0:
             self._network.weight_align(self._total_classes - self._known_classes)
@@ -300,9 +311,11 @@ class MoE(BaseLearner):
             self._update_representation(train_loader, val_loader, optimizer, scheduler)
 
     def _init_train(self, train_loader, val_loader, optimizer, scheduler):
-        prog_bar = tqdm(range(init_epoch))
+        prog_bar = tqdm(range(init_epoch), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
+            if hasattr(train_loader.sampler, "set_epoch"):
+                train_loader.sampler.set_epoch(epoch)
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
@@ -335,11 +348,14 @@ class MoE(BaseLearner):
                 )
                 if val_acc > best_acc:
                     save_dir = os.path.join("save", self._dataset)
-                    os.makedirs(save_dir, exist_ok=True)
+                    if ddp.is_main_process():
+                        os.makedirs(save_dir, exist_ok=True)
                     save_path = os.path.join(save_dir, 'task_{}_best_model.pkl'.format(self._cur_task))
-                    torch.save(self._network, save_path)
+                    if ddp.is_main_process():
+                        torch.save(ddp.unwrap_model(self._network), save_path)
                     best_acc = val_acc
-                    print(f"save best model at epoch {epoch}")
+                    if ddp.is_main_process():
+                        print(f"save best model at epoch {epoch}")
             else:
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
                     self._cur_task,
@@ -354,9 +370,11 @@ class MoE(BaseLearner):
         logging.info(info)
 
     def _update_representation(self, train_loader, val_loader, optimizer, scheduler):
-        prog_bar = tqdm(range(epochs))
+        prog_bar = tqdm(range(epochs), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
+            if hasattr(train_loader.sampler, "set_epoch"):
+                train_loader.sampler.set_epoch(epoch)
             self._network.train()
             loss_details = defaultdict(float)
             correct, total = 0, 0
@@ -394,11 +412,14 @@ class MoE(BaseLearner):
             
             if val_acc > best_acc:
                 save_dir = os.path.join("save", self._dataset)
-                os.makedirs(save_dir, exist_ok=True)
+                if ddp.is_main_process():
+                    os.makedirs(save_dir, exist_ok=True)
                 save_path = os.path.join(save_dir, 'task_{}_best_model.pkl'.format(self._cur_task))
-                torch.save(self._network, save_path)
+                if ddp.is_main_process():
+                    torch.save(ddp.unwrap_model(self._network), save_path)
                 best_acc = val_acc
-                print(f"save best model at epoch {epoch} with acc {val_acc}")
+                if ddp.is_main_process():
+                    print(f"save best model at epoch {epoch} with acc {val_acc}")
             
             info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Val_accy {:.2f}".format(
                 self._cur_task,
@@ -408,19 +429,21 @@ class MoE(BaseLearner):
                 train_acc,
                 val_acc,
             )
-            wandb.log({
-                f"train/task_{self._cur_task}_acc": train_acc,
-                f"train/task_{self._cur_task}_loss" : loss_details['tot_loss'] / len(train_loader),
-                f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
-                f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
-                f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
-                f"eval/task_{self._cur_task}_acc" : val_acc,
-                f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
-            })
+            if ddp.is_main_process():
+                wandb.log({
+                    f"train/task_{self._cur_task}_acc": train_acc,
+                    f"train/task_{self._cur_task}_loss" : loss_details['tot_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
+                    f"eval/task_{self._cur_task}_acc" : val_acc,
+                    f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
+                })
             
             prog_bar.set_description(info)
-        self.visualize_logits(self._network, self.test_loader)
-        self.visualize_gating(self._network, self.test_loader)
+        if ddp.is_main_process():
+            self.visualize_logits(self._network, self.test_loader)
+            self.visualize_gating(self._network, self.test_loader)
         logging.info(info)
         
 

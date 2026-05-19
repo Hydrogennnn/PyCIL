@@ -8,14 +8,19 @@ from utils.toolkit import count_parameters
 import os
 import numpy as np
 import wandb
+from utils import ddp
 
 def train(args):
-    seed_list = copy.deepcopy(args["seed"])
-    device = copy.deepcopy(args["device"])
-    for seed in seed_list:
-        args["seed"] = seed
-        args["device"] = device
-        _train(args)
+    ddp.setup_distributed(args)
+    try:
+        seed_list = copy.deepcopy(args["seed"])
+        device = copy.deepcopy(args["device"])
+        for seed in seed_list:
+            args["seed"] = seed
+            args["device"] = device
+            _train(args)
+    finally:
+        ddp.cleanup_distributed()
 
 
 def _train(args):
@@ -23,12 +28,16 @@ def _train(args):
     init_cls = 0 if args ["init_cls"] == args["increment"] else args["init_cls"]
     logs_name = "logs/{}/{}/{}/{}".format(args["model_name"],args["dataset"], init_cls, args['increment'])
     
-    if not os.path.exists(logs_name):
+    if ddp.is_main_process() and not os.path.exists(logs_name):
         os.makedirs(logs_name)
+    ddp.barrier()
     
-    wandb.init(
-        project = args["project"]
-    )
+    if ddp.is_main_process():
+        wandb.init(
+            project = args["project"]
+        )
+    else:
+        os.environ["WANDB_MODE"] = "disabled"
     
     logfilename = "logs/{}/{}/{}/{}/{}_{}_{}".format(
         args["model_name"],
@@ -39,13 +48,15 @@ def _train(args):
         args["seed"],
         args["convnet_type"],
     )
+    handlers = [
+        logging.FileHandler(filename=logfilename + ".log"),
+        logging.StreamHandler(sys.stdout),
+    ] if ddp.is_main_process() else [logging.NullHandler()]
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(filename)s] => %(message)s",
-        handlers=[
-            logging.FileHandler(filename=logfilename + ".log"),
-            logging.StreamHandler(sys.stdout),
-        ],
+        handlers=handlers,
+        force=True,
     )
 
     _set_random()
@@ -72,6 +83,9 @@ def _train(args):
         model.incremental_train(data_manager)
         cnn_accy, nme_accy = model.eval_task()
         model.after_task()
+
+        if not ddp.is_main_process():
+            continue
 
         if nme_accy is not None:
             logging.info("CNN: {}".format(cnn_accy["grouped"]))
@@ -148,6 +162,10 @@ def _train(args):
 
 
 def _set_device(args):
+    if args.get("distributed", False):
+        args["device"] = [torch.device("cuda:{}".format(args["local_rank"]))]
+        return
+
     device_type = args["device"]
     gpus = []
 

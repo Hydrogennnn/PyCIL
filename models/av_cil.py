@@ -21,16 +21,16 @@ from tqdm.contrib import tzip
 
 EPSILON = 1e-8
 
-init_epoch = 1
-init_lr = 1e-4
+init_epoch = 200
+init_lr = 1e-3
 init_milestones = [60, 120, 170]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 1
-lrate = 1e-4
-milestones = 100
+epochs = 200
+lrate = 1e-3
+milestones = [100]
 lrate_decay = 0.1
 batch_size = 256
 weight_decay = 1e-4
@@ -336,7 +336,7 @@ class AVCIL(BaseLearner):
                 weight_decay=weight_decay,
             )  # 1e-5
             scheduler = optim.lr_scheduler.MultiStepLR(
-                optimizer=optimizer, milestones=[milestones], gamma=lrate_decay
+                optimizer=optimizer, milestones=milestones, gamma=lrate_decay
             )
             self._update_representation(train_loader, val_loader, optimizer, scheduler)
 
