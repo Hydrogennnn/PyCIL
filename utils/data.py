@@ -157,7 +157,8 @@ class AVE(iData):
     test_trsf = [transforms.ToTensor()]
 
     def download_data(self):
-        data = np.load('data/AVE/avcil_features.npz')
+        data = np.load('data/AVE/seq_ave_features.npz', mmap_mode="r")
+        
         
         self.train_data = [{"video": v, "audio": a} for v, a in zip(data["train_videos"], data["train_audios"])]
         self.train_targets = data["train_targets"].astype(np.int64)

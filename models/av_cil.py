@@ -270,8 +270,8 @@ class AVCIL(BaseLearner):
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
 
-        if self._cur_task > 0:
-            self._network.weight_align(self._total_classes - self._known_classes)
+        # if self._cur_task > 0:
+            # self._network.weight_align(self._total_classes - self._known_classes)
     
         
     def cal_contrastive_loss(self, feature_1, feature_2, temperature=0.1):
