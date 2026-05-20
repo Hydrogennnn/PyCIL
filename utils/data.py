@@ -160,12 +160,19 @@ class AVE(iData):
         data = np.load('data/AVE/seq_ave_features.npz', mmap_mode="r")
         
         
-        self.train_data = [{"video": v, "audio": a} for v, a in zip(data["train_videos"], data["train_audios"])]
+        # self.train_data = [{"video": v, "audio": a} for v, a in zip(data["train_videos"], data["train_audios"])]
         self.train_targets = data["train_targets"].astype(np.int64)
-        self.test_data = [{"video": v, "audio": a} for v, a in zip(data["test_videos"], data["test_audios"])]
+        # self.test_data = [{"video": v, "audio": a} for v, a in zip(data["test_videos"], data["test_audios"])]
         self.test_targets = data["test_targets"].astype(np.int64)
-        self.val_data = [{"video": v, "audio": a} for v, a in zip(data["val_videos"], data["val_audios"])]
+        # self.val_data = [{"video": v, "audio": a} for v, a in zip(data["val_videos"], data["val_audios"])]
         self.val_targets = data["val_targets"].astype(np.int64)
+
+
+        self.train_data = {"m1" : data["train_videos"], "m2": data["train_audios"]}
+        self.test_data = {"m1" : data["test_videos"], "m2": data["test_audios"]}
+        self.val_data = {"m1" : data["val_videos"], "m2": data["val_audios"]}
+
+        
         # audio_features = np.load("./data/AVE/audio_features.npy")
         # video_features = np.load("./data/AVE/video_features.npy")
         # labels = np.load("./data/AVE/targets.npy")

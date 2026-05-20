@@ -62,30 +62,69 @@ class DataManager(object):
         else:
             raise ValueError("Unknown mode {}.".format(mode))
 
-        data, targets = [], []
+        # data, targets = [], []
+        data_indices, targets = [], []
         for idx in indices:
-            if m_rate is None:
-                class_data, class_targets = self._select(
-                    x, y, low_range=idx, high_range=idx + 1
-                )
-            else:
-                class_data, class_targets = self._select_rmm(
-                    x, y, low_range=idx, high_range=idx + 1, m_rate=m_rate
-                )
-            data.append(class_data)
-            targets.append(class_targets)
+            class_indices = self._select_indices(
+                y, low_range=idx, high_range=idx + 1
+            )
+     
+            data_indices.append(class_indices)
+            targets.append(y[class_indices])
 
-        if appendent is not None and len(appendent) != 0:
-            appendent_data, appendent_targets = appendent
-            data.append(appendent_data)
-            targets.append(appendent_targets)
+            data_indices = (
+                np.concatenate(data_indices).astype(np.int64)
+                if len(data_indices) != 0
+                else np.array([], dtype=np.int64)
+            )
+            targets = (
+                np.concatenate(targets)
+                if len(targets) != 0
+                else np.array([], dtype=y.dtype)
+            )
+            appendent_data, appendent_targets = None, None
+            if appendent is not None and len(appendent) != 0:
+                appendent_data, appendent_targets = appendent
+                targets = np.concatenate((targets, appendent_targets))
+
+            dataset = DummyDataset(
+                x,
+                targets,
+                trsf,
+                self.use_path,
+                self.aug if source == "train" and mode == "train" else 1,
+                indices=data_indices,
+                appendent_data=appendent_data,
+            )
+            if ret_data:
+                data = self._materialize_dict_data(x, data_indices)
+                if appendent_data is not None:
+                    data = np.concatenate((data, np.asarray(appendent_data, dtype=object)))
+                return data, targets, dataset
+            return dataset
+        # for idx in indices:
+        #     if m_rate is None:
+        #         class_data, class_targets = self._select(
+        #             x, y, low_range=idx, high_range=idx + 1
+        #         )
+        #     else:
+        #         class_data, class_targets = self._select_rmm(
+        #             x, y, low_range=idx, high_range=idx + 1, m_rate=m_rate
+        #         )
+        #     data.append(class_data)
+        #     targets.append(class_targets)
+
+        # if appendent is not None and len(appendent) != 0:
+        #     appendent_data, appendent_targets = appendent
+        #     data.append(appendent_data)
+        #     targets.append(appendent_targets)
             
-        data, targets = np.concatenate(data), np.concatenate(targets)
+        # data, targets = np.concatenate(data), np.concatenate(targets)
 
-        if ret_data:
-            return data, targets, DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
-        else:
-            return DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
+        # if ret_data:
+        #     return data, targets, DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
+        # else:
+        #     return DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
 
         
     def get_finetune_dataset(self,known_classes,total_classes,source,mode,appendent,type="ratio"):
@@ -193,27 +232,47 @@ class DataManager(object):
     def getlen(self, index):
         y = self._train_targets
         return np.sum(np.where(y == index))
+    
+
+    def _select_indices(self, y, low_range, high_range):
+        return np.where(np.logical_and(y >= low_range, y < high_range))[0]
 
 
 class DummyDataset(Dataset):
-    def __init__(self, data, labels, trsf, use_path=False, aug=1):
-        assert len(data) == len(labels), "Data size error!"
+    # def __init__(self, data, labels, trsf, use_path=False, aug=1):
+    def __init__(
+        self,
+        data,
+        labels,
+        trsf,
+        use_path=False,
+        aug=1,
+        indices=None,
+        appendent_data=None,
+    ):  
+        assert isinstance(data, dict), "Data type error!"
         self.aug = aug
         self.data = data
+        self.indices = indices
+        self.appendent_data = appendent_data
         self.labels = labels
         self.trsf = trsf
-        # self.use_path = use_path
-
+        
     def __len__(self):
-        return len(self.data)
+        return len(self.labels)
 
     
     def __getitem__(self, idx):
+        base_len = len(self.indices)
+        if idx < base_len:
+            real_idx = self.indices[idx]
+            sample = {k: v[real_idx] for k,v in self.data.items()}
+        else:
+            real_idx = idx - base_len
+            sample = {k: v[real_idx] for k,v in self.appendent_data.items()}
         
-        
-        sample = self.data[idx]
         assert isinstance(sample, dict)
-        sample = {k: torch.tensor(v) for k,v in sample.items()}
+        sample = {k: torch.as_tensor(v) for k,v in sample.items()}
         return sample, self.labels[idx]
     
     # def __getitem__(self, idx):
