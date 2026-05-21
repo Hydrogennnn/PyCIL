@@ -23,7 +23,9 @@ exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
 
 
 
-wandb login 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
+# wandb login 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
 
 # torchrun --nproc_per_node=3 main.py --config ./exps/moe.json
-python main.py --config exps/moe.json
+# python main.py --config exps/moe.json
+cd pre_data
+python avcil.py
