@@ -39,11 +39,11 @@ class DataManager(object):
         self, indices, source, mode, appendent=None, ret_data=False, m_rate=None
     ):
         if source == "train":
-            x, y = self._train_data, self._train_targets
+            x_idxs, y = self._train_data_idx, self._train_targets
         elif source == "test":
-            x, y = self._test_data, self._test_targets
+            x_idxs, y = self._test_data_idx, self._test_targets
         elif source == "val":
-            x, y = self._val_data, self._val_targets
+            x_idxs, y = self._val_data_idx, self._val_targets
         else:
             raise ValueError("Unknown data source {}.".format(source))
 
@@ -72,35 +72,34 @@ class DataManager(object):
             data_indices.append(class_indices)
             targets.append(y[class_indices])
 
-            data_indices = (
-                np.concatenate(data_indices).astype(np.int64)
-                if len(data_indices) != 0
-                else np.array([], dtype=np.int64)
-            )
-            targets = (
-                np.concatenate(targets)
-                if len(targets) != 0
-                else np.array([], dtype=y.dtype)
-            )
-            appendent_data, appendent_targets = None, None
-            if appendent is not None and len(appendent) != 0:
-                appendent_data, appendent_targets = appendent
-                targets = np.concatenate((targets, appendent_targets))
-
-            dataset = DummyDataset(
-                x,
-                targets,
-                trsf,
-                self.use_path,
-                self.aug if source == "train" and mode == "train" else 1,
-                indices=data_indices,
-                appendent_data=appendent_data,
-            )
-            if ret_data:
-                data = self._materialize_dict_data(x, data_indices)
-                if appendent_data is not None:
-                    data = np.concatenate((data, np.asarray(appendent_data, dtype=object)))
-                return data, targets, dataset
+        data_indices = (
+            np.concatenate(data_indices).astype(np.int64)
+            if len(data_indices) != 0
+            else np.array([], dtype=np.int64)
+        )
+        targets = (
+            np.concatenate(targets)
+            if len(targets) != 0
+            else np.array([], dtype=y.dtype)
+        )
+        appendent_data, appendent_targets = None, None
+        if appendent is not None and len(appendent) != 0:
+            appendent_data, appendent_targets = appendent
+            targets = np.concatenate((targets, appendent_targets))
+            
+        x_idxs = x_idxs[data_indices]
+        dataset = DummyDataset(
+            x_idxs,
+            targets,
+            trsf,
+            self.use_path,
+            self.aug if source == "train" and mode == "train" else 1,
+            appendent_data=appendent_data,
+        )
+        if ret_data:
+            data = dataset.get_all_data()
+            return data, targets, dataset
+        else:
             return dataset
         # for idx in indices:
         #     if m_rate is None:
@@ -126,61 +125,23 @@ class DataManager(object):
         # else:
         #     return DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
 
-        
-    def get_finetune_dataset(self,known_classes,total_classes,source,mode,appendent,type="ratio"):
-        if source == 'train':
-            x, y = self._train_data, self._train_targets
-        elif source == 'test':
-            x, y = self._test_data, self._test_targets
-        else:
-            raise ValueError('Unknown data source {}.'.format(source))
-
-        if mode == 'train':
-            trsf = transforms.Compose([*self._train_trsf, *self._common_trsf])
-        elif mode == 'test':
-            trsf = transforms.Compose([*self._test_trsf, *self._common_trsf])
-        else:
-            raise ValueError('Unknown mode {}.'.format(mode))
-        val_data = []
-        val_targets = []
-
-        old_num_tot = 0
-        appendent_data, appendent_targets = appendent
-
-        for idx in range(0, known_classes):
-            append_data, append_targets = self._select(appendent_data, appendent_targets,
-                                                       low_range=idx, high_range=idx+1)
-            num=len(append_data)
-            if num == 0:
-                continue
-            old_num_tot += num
-            val_data.append(append_data)
-            val_targets.append(append_targets)
-        if type == "ratio":
-            new_num_tot = int(old_num_tot*(total_classes-known_classes)/known_classes)
-        elif type == "same":
-            new_num_tot = old_num_tot
-        else:
-            assert 0, "not implemented yet"
-        new_num_average = int(new_num_tot/(total_classes-known_classes))
-        for idx in range(known_classes,total_classes):
-            class_data, class_targets = self._select(x, y, low_range=idx, high_range=idx+1)
-            val_indx = np.random.choice(len(class_data),new_num_average, replace=False)
-            val_data.append(class_data[val_indx])
-            val_targets.append(class_targets[val_indx])
-        val_data=np.concatenate(val_data)
-        val_targets = np.concatenate(val_targets)
-        return DummyDataset(val_data, val_targets, trsf, self.use_path, self.aug if source == "train" and mode == "train" else 1)
-
 
     def _setup_data(self, dataset_name, shuffle, seed):
-        idata = _get_idata(dataset_name)
+        idata = _get_metadata(dataset_name)
         idata.download_data()
 
         # Data
-        self._train_data, self._train_targets = idata.train_data, idata.train_targets
-        self._test_data, self._test_targets = idata.test_data, idata.test_targets
-        self._val_data, self._val_targets = idata.val_data, idata.val_targets
+        # self._train_data, self._train_targets = idata.train_data, idata.train_targets
+        # self._test_data, self._test_targets = idata.test_data, idata.test_targets
+        # self._val_data, self._val_targets = idata.val_data, idata.val_targets
+        self._train_data_idx = idata.train_data_idx
+        self._test_data_idx = idata.test_data_idx
+        self._val_data_idx = idata.val_data_idx
+        self._all_targets = idata.targets
+        
+        self._train_targets = self._all_targets[self._train_data_idx]
+        self._test_targets = self._all_targets[self._test_data_idx]
+        self._val_targets = self._all_targets[self._val_data_idx]
         self.use_path = False
 
         # Transforms
@@ -205,6 +166,9 @@ class DataManager(object):
         self._test_targets = _map_new_class_index(self._test_targets, self._class_order)
         self._val_targets = _map_new_class_index(self._val_targets, self._class_order)
         
+    
+    
+    
     def _select(self, x, y, low_range, high_range):
         idxes = np.where(np.logical_and(y >= low_range, y < high_range))[0]
         
@@ -229,51 +193,53 @@ class DataManager(object):
             new_idxes = np.where(np.logical_and(y >= low_range, y < high_range))[0]
         return x[new_idxes], y[new_idxes]
 
-    def getlen(self, index):
-        y = self._train_targets
-        return np.sum(np.where(y == index))
+    # def getlen(self, index):
+    #     y = self._train_targets
+    #     return np.sum(np.where(y == index))
     
 
     def _select_indices(self, y, low_range, high_range):
         return np.where(np.logical_and(y >= low_range, y < high_range))[0]
+    
+    def _materialize_dict_data(self, data, indices):
+        return np.asarray(
+            [{k: v[idx] for k, v in data.items()} for idx in indices],
+            dtype=object,
+        )
 
 
 class DummyDataset(Dataset):
     # def __init__(self, data, labels, trsf, use_path=False, aug=1):
     def __init__(
         self,
-        data,
+        data_idxs,
         labels,
         trsf,
         use_path=False,
         aug=1,
-        indices=None,
         appendent_data=None,
     ):  
-        assert isinstance(data, dict), "Data type error!"
+        # assert isinstance(data, dict), "Data type error!"
         self.aug = aug
-        self.data = data
-        self.indices = indices
+        self.data_idxs = data_idxs
         self.appendent_data = appendent_data
         self.labels = labels
         self.trsf = trsf
+
+        self._load_data()
         
     def __len__(self):
         return len(self.labels)
 
     
+    def _load_data(self):
+        pass
+            
+
+
     def __getitem__(self, idx):
-        base_len = len(self.indices)
-        if idx < base_len:
-            real_idx = self.indices[idx]
-            sample = {k: v[real_idx] for k,v in self.data.items()}
-        else:
-            real_idx = idx - base_len
-            sample = {k: v[real_idx] for k,v in self.appendent_data.items()}
-        
-        assert isinstance(sample, dict)
-        sample = {k: torch.as_tensor(v) for k,v in sample.items()}
-        return sample, self.labels[idx]
+        pass
+
     
     # def __getitem__(self, idx):
     #     if self.aug == 1:
@@ -292,26 +258,54 @@ class DummyDataset(Dataset):
     #         return idx, *images, label
 
 
+class AVE_DummyDataset(DummyDataset):
+    def __init__(
+        self,
+        data_idxs,
+        labels,
+        trsf,
+        use_path=False,
+        aug=1,
+        appendent_data=None,
+    ):
+        super().__init__(data_idxs, labels, trsf, use_path, aug, appendent_data)
+        self.m = 2
+
+    def _load_data(self):
+        self.video_features = np.load("data/AVE/video_features.npy", allow_pickle=True, mmap_mode="r")
+        self.audio_features = np.load("data/AVE/audio_features.npy", allow_pickle=True, mmap_mode="r")
+    
+    def __getitem__(self, idx):
+        base_len = len(self.data_idxs)
+        if idx < base_len:
+            real_idx = self.data_idxs[idx]
+            sample = {"m1": self.video_features[real_idx], "m2": self.audio_features[real_idx]}
+        else:
+            mem_idx = idx - base_len
+            sample = self.appendent_data[mem_idx]
+        
+        assert isinstance(sample, dict)
+        sample = {k: torch.as_tensor(v) for k,v in sample.items()}
+        return sample, self.labels[idx]
+    
+    def get_all_data(self):
+        data = []
+        for idx in tqdm(range(len(self))):
+            sample, _ = self.__getitem__(idx)
+            data.append(sample)
+        return data
+
+
 def _map_new_class_index(y, order):
     return np.array(list(map(lambda x: order.index(x), y)))
 
 
-def _get_idata(dataset_name):
+def _get_metadata(dataset_name):
     name = dataset_name.lower()
-    if name == "cifar10":
-        return iCIFAR10()
-    elif name == "cifar100":
-        return iCIFAR100()
-    elif name == "imagenet1000":
-        return iImageNet1000()
-    elif name == "imagenet100":
-        return iImageNet100()
-    elif name == "cifar100_aa":
-        return iCIFAR100_AA()
-    elif name == "cifar10_aa":
-        return iCIFAR10_AA()
-    elif name == "ave":
-        return AVE()
+    if name == "ave":
+        return AVE()  
+    elif name == "mmea-cl":
+        raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
 
