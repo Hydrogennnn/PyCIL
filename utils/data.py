@@ -157,9 +157,9 @@ class AVE(iData):
     test_trsf = [transforms.ToTensor()]
 
     def download_data(self):
-        split = np.load("./data/AVE/split.npy", allow_pickle=True).item()
+        split = np.load("data/AVE/split.npy", allow_pickle=True).item()
         self.train_data_idx = split["train"]
         self.test_data_idx = split["test"]
         self.val_data_idx = split["val"]
 
-        self.targets = np.load("data/AVE/targets.npy", allow_pickle=True)
+        self.targets = np.load("data/AVE/labels.npy", allow_pickle=True)

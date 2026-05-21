@@ -9,8 +9,8 @@ if __name__ == '__main__':
     
     # print(class_id.item(),keys())
     os.chdir("..")
-    dataroot = "data/AVE_features"
-    data = np.load(os.path.join(dataroot, "seq_ave_features.npz"), allow_pickle=True).item()
+    dataroot = "data/AVE"
+    data = np.load(os.path.join(dataroot, "seq_ave_features.npz"), allow_pickle=True)
     
     video_features = np.concatenate([data['train_videos'], data['test_videos'], data['val_videos']], axis=0)
     audio_features = np.concatenate([data['train_audios'], data['test_audios'], data['val_audios']], axis=0)

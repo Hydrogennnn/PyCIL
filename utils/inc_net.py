@@ -1278,23 +1278,20 @@ class MoENet(BaseNet):
         return 768
     
     def get_gating(self, x):
-        v, a = x["video"], x["audio"]
-        x = torch.cat([v,a], dim=1)
+        x = torch.cat(list(x.values()), dim=1)
         B, seq_len, d = x.shape
         gate = self.moe.get_gating(x.view(B*seq_len, -1))
         return gate
     
     def get_load(self, x):
-        v, a = x["video"], x["audio"]
-        x = torch.cat([v,a], dim=1)
+        x = torch.cat(list(x.values()), dim=1)
         B, seq_len, d = x.shape
         load = self.moe.get_load(x.view(B*seq_len, -1)).view(B, seq_len, -1)
         load = torch.sum(load, dim=1)
         return load
     
     def extract_vector(self, x):
-        v, a = x["video"], x["audio"]
-        x = torch.cat([v,a], dim=1)
+        x = torch.cat(list(x.values()), dim=1)
         B, seq_len, d = x.shape
         x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
         x = self.ln(x)
@@ -1331,20 +1328,13 @@ class MoENet(BaseNet):
         return fc
 
     def forward(self, x):
-        v, a = x["video"], x["audio"]
-        x = torch.cat([v,a], dim=1)
+        x = torch.cat(list(x.values()), dim=1)
         B, seq_len, d = x.shape
         x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
         x = self.ln(x)
         x = torch.mean(x, dim=1)
-        
-        
         # x = self.moe(x)
         out = self.fc(x)
-        # out.update(x)
-        # if hasattr(self, "gradcam") and self.gradcam:
-        #     out["gradcam_gradients"] = self._gradcam_gradients
-        #     out["gradcam_activations"] = self._gradcam_activations
 
         return out
     
