@@ -88,7 +88,7 @@ class DataManager(object):
             targets = np.concatenate((targets, appendent_targets))
             
         x_idxs = x_idxs[data_indices]
-        dataset = DummyDataset(
+        dataset = self.Dataset_class(
             x_idxs,
             targets,
             trsf,
@@ -127,7 +127,7 @@ class DataManager(object):
 
 
     def _setup_data(self, dataset_name, shuffle, seed):
-        idata = _get_metadata(dataset_name)
+        idata, self.Dataset_class = _get_metadata(dataset_name)
         idata.download_data()
 
         # Data
@@ -303,7 +303,7 @@ def _map_new_class_index(y, order):
 def _get_metadata(dataset_name):
     name = dataset_name.lower()
     if name == "ave":
-        return AVE()  
+        return AVE(), AVE_DummyDataset  
     elif name == "mmea-cl":
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
     else:

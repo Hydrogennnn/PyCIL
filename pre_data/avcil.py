@@ -16,6 +16,13 @@ if __name__ == '__main__':
     audio_features = np.concatenate([data['train_audios'], data['test_audios'], data['val_audios']], axis=0)
     labels = np.concatenate([data['train_targets'], data['test_targets'], data['val_targets']], axis=0)
 
+    split = {}
+    split["train"] = np.arange(len(data['train_targets']))
+    split["test"] = np.arange(len(data['train_targets']), len(data['train_targets']) + len(data['test_targets']))
+    split["val"] = np.arange(len(data['train_targets']) + len(data['test_targets']), len(labels))
+    np.save(os.path.join(dataroot, "split.npy"), split)
+
+
     np.save(os.path.join(dataroot, "video_features.npy"), video_features)
     np.save(os.path.join(dataroot, "audio_features.npy"), audio_features)
     np.save(os.path.join(dataroot, "labels.npy"), labels)
