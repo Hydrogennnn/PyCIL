@@ -39,11 +39,11 @@ class DataManager(object):
         self, indices, source, mode, appendent=None, ret_data=False, m_rate=None
     ):
         if source == "train":
-            x_idxs, y = self._train_data_idx, self._train_targets
+            x, y = self._train_data, self._train_targets
         elif source == "test":
-            x_idxs, y = self._test_data_idx, self._test_targets
+            x, y = self._test_data, self._test_targets
         elif source == "val":
-            x_idxs, y = self._val_data_idx, self._val_targets
+            x, y = self._val_data, self._val_targets
         else:
             raise ValueError("Unknown data source {}.".format(source))
 
@@ -63,33 +63,24 @@ class DataManager(object):
             raise ValueError("Unknown mode {}.".format(mode))
 
         # data, targets = [], []
-        data_indices, targets = [], []
+        data, targets = [], []
         for idx in indices:
-            class_indices = self._select_indices(
-                y, low_range=idx, high_range=idx + 1
+            class_data, class_targets = self._select(
+                x, y, low_range=idx, high_range=idx + 1
             )
      
-            data_indices.append(class_indices)
-            targets.append(y[class_indices])
+            data.append(class_data)
+            targets.append(class_targets)
 
-        data_indices = (
-            np.concatenate(data_indices).astype(np.int64)
-            if len(data_indices) != 0
-            else np.array([], dtype=np.int64)
-        )
-        targets = (
-            np.concatenate(targets)
-            if len(targets) != 0
-            else np.array([], dtype=y.dtype)
-        )
+        
         appendent_data, appendent_targets = None, None
         if appendent is not None and len(appendent) != 0:
             appendent_data, appendent_targets = appendent
             targets = np.concatenate((targets, appendent_targets))
-            
-        x_idxs = x_idxs[data_indices]
+
+
         dataset = self.Dataset_class(
-            x_idxs,
+            x,
             targets,
             trsf,
             self.use_path,
@@ -134,14 +125,14 @@ class DataManager(object):
         # self._train_data, self._train_targets = idata.train_data, idata.train_targets
         # self._test_data, self._test_targets = idata.test_data, idata.test_targets
         # self._val_data, self._val_targets = idata.val_data, idata.val_targets
-        self._train_data_idx = idata.train_data_idx
-        self._test_data_idx = idata.test_data_idx
-        self._val_data_idx = idata.val_data_idx
-        self._all_targets = idata.targets
+        self._train_data = idata.train_data_idx
+        self._test_data = idata.test_data_idx
+        self._val_data = idata.val_data_idx
         
-        self._train_targets = self._all_targets[self._train_data_idx]
-        self._test_targets = self._all_targets[self._test_data_idx]
-        self._val_targets = self._all_targets[self._val_data_idx]
+        
+        self._train_targets = idata.train_targets
+        self._test_targets = idata.test_targets
+        self._val_targets = idata.val_targets
         self.use_path = False
 
         # Transforms
