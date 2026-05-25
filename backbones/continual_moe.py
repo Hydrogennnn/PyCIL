@@ -264,14 +264,23 @@ class Continual_MoE(nn.Module):
         logistic_noise = torch.log(uniform) - torch.log1p(-uniform)
         return torch.sigmoid((logits + logistic_noise) / self.gumbel_tau)
 
+    def _straight_through_top_k(self, scores):
+        # Sparse forward pass with dense gradients: the dispatcher sees exact
+        # zeros outside top-k, while gradients still flow through relaxed scores.
+        top_indices = torch.topk(scores, min(self.top_k, self.experts_num), dim=1).indices
+        hard_selection = torch.zeros_like(scores).scatter(1, top_indices, 1.0)
+        return hard_selection + scores - scores.detach()
+
     def dirichlet_routing(self, x):
         route = self.route_distribution(x)
         alpha = route["alpha"]
         select_probs = route["select_probs"]
         if self.training:
-            # During training, sample both expert activation and expert weights
-            # so gradients can shape the routing distribution.
-            selection = self._relaxed_bernoulli_sample(route["select_logits"])
+            # Sample a relaxed Bernoulli score, then use a straight-through top-k
+            # mask. This keeps the actual MoE computation sparse and avoids
+            # sending every token to every expert.
+            relaxed_selection = self._relaxed_bernoulli_sample(route["select_logits"])
+            selection = self._straight_through_top_k(relaxed_selection)
             weights = Dirichlet(alpha).rsample()
         else:
             # At inference, use deterministic top-k selection and the Dirichlet
