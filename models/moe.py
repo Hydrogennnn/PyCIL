@@ -42,6 +42,9 @@ class MoE(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
         self._network = MoENet(args, False)
+        # Weights for the DirMoE continual-learning regularizers.
+        self.route_prior_weight = args.get("route_prior_weight", 0.1)
+        self.route_sparsity_weight = args.get("route_sparsity_weight", 0.01)
 
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
@@ -161,7 +164,14 @@ class MoE(BaseLearner):
     
     
     def get_loss(self, inputs, targets):
-        details = {}
+        details = {
+            "KD_loss": 0.0,
+            "Router_KD_loss": 0.0,
+            "Dirichlet_prior_loss": 0.0,
+            "Dirichlet_KL_loss": 0.0,
+            "Bernoulli_KL_loss": 0.0,
+            "Route_sparsity_loss": 0.0,
+        }
         logits = self._network(inputs)["logits"]
         loss_clf = F.cross_entropy(logits, targets)
         
@@ -182,30 +192,41 @@ class MoE(BaseLearner):
                 loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (T**2)
             loss_KD = loss_KD.sum()
             details["KD_loss"] = loss_KD.item()
-        # Router_KD
-        
-        loss_route_kd = 0.0
+        # DirMoE routing prior: constrain old-class exemplars with the previous
+        # task posterior distribution, and keep the expected active expert count sparse.
+        loss_route_prior = torch.zeros((), device=self._device)
+        loss_route_sparsity = torch.zeros((), device=self._device)
         idxes = torch.where(targets < self._known_classes)[0]
-        if self._old_network is not None and len(idxes)!= 0:
-            inputs = {k:v[idxes] for k,v in inputs.items()}
-            route_score= ddp.unwrap_model(self._network).get_gating(inputs)
-            with torch.no_grad():
-                old_route_score = self._old_network.get_gating(inputs)
-                
-            log_route_score = F.log_softmax(route_score, dim=-1)
-            old_route_score = F.softmax(old_route_score, dim=-1)
+        net = ddp.unwrap_model(self._network)
+        if self.route_sparsity_weight > 0:
+            # Apply to all samples so the relaxed router remains close to top-k.
+            loss_route_sparsity = net.sparsity_loss(inputs)
+            details["Route_sparsity_loss"] = loss_route_sparsity.item()
 
-            loss_route_kd = F.kl_div(log_route_score, old_route_score, reduction='batchmean')
-            
-            details["Router_KD_loss"] = loss_route_kd.item()
-            # if not self._network.training:
-            #     print(len(idxes))
-            #     print(targets)
-                # print("route_score nan:", route_score.isnan().any().item())
-                # print("old_route_score nan:", old_route_score.isnan().any().item())
-                # print("route_score range:", route_score.min().item(), route_score.max().item())
-                # print("idxes len:", len(idxes))
-        loss = loss_clf + 0.5*loss_KD + loss_route_kd
+        if self._old_network is not None and len(idxes) != 0:
+            # Only old-class rehearsal samples have a previous-task posterior;
+            # use it as the prior to reduce routing drift and forgetting.
+            old_inputs = {k:v[idxes] for k,v in inputs.items()}
+            with torch.no_grad():
+                old_alpha, old_select_probs = self._old_network.get_route_params(old_inputs)
+                old_alpha = old_alpha.detach()
+                old_select_probs = old_select_probs.detach()
+            loss_route_prior, route_details = net.dirichlet_prior_loss(
+                old_inputs,
+                prior_alpha=old_alpha,
+                prior_select_probs=old_select_probs,
+            )
+            details["Dirichlet_prior_loss"] = loss_route_prior.item()
+            details["Dirichlet_KL_loss"] = route_details["dirichlet_kl"].item()
+            details["Bernoulli_KL_loss"] = route_details["bernoulli_kl"].item()
+            details["Router_KD_loss"] = loss_route_prior.item()
+
+        loss = (
+            loss_clf
+            + 0.5 * loss_KD
+            + self.route_prior_weight * loss_route_prior
+            + self.route_sparsity_weight * loss_route_sparsity
+        )
         
         
         details["CE_loss"] = loss_clf.item()
@@ -321,14 +342,13 @@ class MoE(BaseLearner):
             correct, total = 0, 0
             for i, (inputs, targets) in enumerate(train_loader):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-
-                loss = F.cross_entropy(logits, targets)
+                loss, details = self.get_loss(inputs, targets)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 losses += loss.item()
 
+                logits = details["logits"]
                 _, preds = torch.max(logits, dim=1)
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
@@ -436,6 +456,10 @@ class MoE(BaseLearner):
                     f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
                     f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
                     f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_Dirichlet_prior_loss" : loss_details['Dirichlet_prior_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_Dirichlet_KL_loss" : loss_details['Dirichlet_KL_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_Bernoulli_KL_loss" : loss_details['Bernoulli_KL_loss'] / len(train_loader),
+                    f"train/task_{self._cur_task}_Route_sparsity_loss" : loss_details['Route_sparsity_loss'] / len(train_loader),
                     f"eval/task_{self._cur_task}_acc" : val_acc,
                     f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
                 })

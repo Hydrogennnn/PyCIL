@@ -1,9 +1,11 @@
 
 import torch
 import torch.nn as nn
-from torch.distributions import Normal
+from torch.distributions import Bernoulli, Dirichlet, Normal, kl_divergence
 import math
 
+
+EPSILON = 1e-8
 
 
 
@@ -170,20 +172,35 @@ class SparseDispatcher(object):
         return torch.split(self._nonzero_gates, self._part_sizes, dim=0)
 
 class Continual_MoE(nn.Module):
-    def __init__(self, ) -> None:
+    def __init__(
+        self,
+        experts_num=16,
+        top_k=2,
+        d_model=768,
+        ffn_num=64,
+        dirichlet_min_alpha=1e-3,
+        gumbel_tau=1.0,
+    ) -> None:
         super().__init__()
-        self.experts_num=16
+        self.experts_num = experts_num
         self.register_buffer("mean", torch.tensor([0.0]))
         self.register_buffer("std", torch.tensor([1.0]))
-        self.top_k = 2
-        self.d_model = 768
-        self.ffn_num = 64
-        self.router = nn.Parameter(torch.zeros(self.d_model, self.experts_num), requires_grad=True)
-        self.w_noise = nn.Parameter(torch.zeros(self.d_model, self.experts_num), requires_grad=True)
+        self.top_k = top_k
+        self.d_model = d_model
+        self.ffn_num = ffn_num
+        self.dirichlet_min_alpha = dirichlet_min_alpha
+        self.gumbel_tau = gumbel_tau
+        # select_router models Bernoulli expert activation; alpha_router models
+        # the Dirichlet concentration used to mix activated experts.
+        self.select_router = nn.Linear(self.d_model, self.experts_num)
+        self.alpha_router = nn.Linear(self.d_model, self.experts_num)
         self.adaptmlp_list = nn.ModuleList()
         self.noisy_gating = True
         self.softmax = nn.Softmax(1)
         self.softplus = nn.Softplus()
+        self.last_alpha = None
+        self.last_select_probs = None
+        self.last_gates = None
         for _ in range(self.experts_num):  #
             self.adaptmlp = Adapter(d_model=self.d_model, dropout=0.2, bottleneck=self.ffn_num,
                                     init_option='lora',
@@ -194,15 +211,23 @@ class Continual_MoE(nn.Module):
         
     
     def get_gating(self, x):
-        gates = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise, return_logits=True)
-        return gates
+        # Keep the old public API for visualization/KD callers. These are
+        # Bernoulli logits, not final normalized MoE gates.
+        return self.route_distribution(x)["select_logits"]
+
+    def get_route_params(self, x):
+        # Returned parameters define the full routing posterior q(z, w | x):
+        # Bernoulli expert selection probabilities and Dirichlet mix weights.
+        route = self.route_distribution(x)
+        return route["alpha"], route["select_probs"]
     
     def get_load(self, x):
-        gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
-        return load
+        gates = self.dirichlet_routing(x)
+        return (gates > 0).float()
     
     def forward(self, x, return_load=False):
-        gates, load = self.noisy_top_k_gating(x, self.training, self.router,self.w_noise)
+        gates = self.dirichlet_routing(x)
+        load = (gates > 0).float()
         dispatcher = SparseDispatcher(self.experts_num, gates)
         expert_inputs = dispatcher.dispatch(x)  # list of [n_i, d_model]，n_i 为分配到第i个专家的样本数
         expert_outputs = [self.adaptmlp_list[i](expert_inputs[i].to(x), add_residual=True)
@@ -220,6 +245,82 @@ class Continual_MoE(nn.Module):
             return outputs, load
         else:
             return outputs
+
+    def route_distribution(self, x):
+        # alpha must stay strictly positive for a valid Dirichlet distribution.
+        select_logits = self.select_router(x)
+        select_probs = torch.sigmoid(select_logits)
+        alpha = self.softplus(self.alpha_router(x)) + self.dirichlet_min_alpha
+        return {
+            "alpha": alpha,
+            "select_logits": select_logits,
+            "select_probs": select_probs,
+        }
+
+    def _relaxed_bernoulli_sample(self, logits):
+        # Differentiable Bernoulli relaxation via logistic/Gumbel noise.
+        eps = torch.finfo(logits.dtype).eps
+        uniform = torch.rand_like(logits).clamp_(eps, 1.0 - eps)
+        logistic_noise = torch.log(uniform) - torch.log1p(-uniform)
+        return torch.sigmoid((logits + logistic_noise) / self.gumbel_tau)
+
+    def dirichlet_routing(self, x):
+        route = self.route_distribution(x)
+        alpha = route["alpha"]
+        select_probs = route["select_probs"]
+        if self.training:
+            # During training, sample both expert activation and expert weights
+            # so gradients can shape the routing distribution.
+            selection = self._relaxed_bernoulli_sample(route["select_logits"])
+            weights = Dirichlet(alpha).rsample()
+        else:
+            # At inference, use deterministic top-k selection and the Dirichlet
+            # mean to avoid sampling variance.
+            top_indices = torch.topk(select_probs, min(self.top_k, self.experts_num), dim=1).indices
+            selection = torch.zeros_like(select_probs).scatter(1, top_indices, 1.0)
+            weights = alpha / alpha.sum(dim=1, keepdim=True).clamp_min(EPSILON)
+
+        # Final gates combine "which experts are active" with "how much each
+        # active expert contributes", then renormalize per token.
+        gates = selection * weights
+        gates = gates / gates.sum(dim=1, keepdim=True).clamp_min(EPSILON)
+        self.last_alpha = alpha
+        self.last_select_probs = select_probs
+        self.last_gates = gates
+        return gates
+
+    def dirichlet_prior_loss(self, x, prior_alpha=None, prior_select_probs=None):
+        # KL(q_current || q_prior). In continual learning, q_prior is usually
+        # the previous task model's routing posterior for old-class samples.
+        route = self.route_distribution(x)
+        alpha = route["alpha"]
+        select_probs = route["select_probs"]
+        if prior_alpha is None:
+            prior_alpha = torch.ones_like(alpha)
+        prior_alpha = prior_alpha.clamp_min(self.dirichlet_min_alpha)
+        alpha = alpha.clamp_min(self.dirichlet_min_alpha)
+        # Match the Dirichlet expert-weight distribution.
+        dir_kl = kl_divergence(Dirichlet(alpha), Dirichlet(prior_alpha)).mean()
+
+        if prior_select_probs is None:
+            target_active = min(self.top_k, self.experts_num)
+            prior_select_probs = torch.full_like(select_probs, target_active / self.experts_num)
+        prior_select_probs = prior_select_probs.clamp(1e-5, 1.0 - 1e-5)
+        select_probs = select_probs.clamp(1e-5, 1.0 - 1e-5)
+        # Match the Bernoulli expert-activation distribution.
+        bern_kl = kl_divergence(Bernoulli(probs=select_probs), Bernoulli(probs=prior_select_probs)).mean()
+        return dir_kl + bern_kl, {
+            "dirichlet_kl": dir_kl,
+            "bernoulli_kl": bern_kl,
+        }
+
+    def sparsity_loss(self, x):
+        # Keep the expected number of activated experts near top_k. This
+        # prevents the relaxed Bernoulli path from activating every expert.
+        select_probs = self.route_distribution(x)["select_probs"]
+        target_active = min(self.top_k, self.experts_num)
+        expected_active = select_probs.sum(dim=1)
+        return (expected_active - target_active).pow(2).mean()
 
     
     def noisy_top_k_gating(self, x, train, w_gate, w_noise, noise_epsilon=1e-2, return_logits=False):

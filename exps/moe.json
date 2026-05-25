@@ -8,9 +8,15 @@
     "init_cls": 7,
     "increment": 7,
     "model_name": "moe",
+    "moe_num_experts": 16,
+    "moe_top_k": 2,
+    "moe_ffn_num": 64,
+    "dirichlet_min_alpha": 0.001,
+    "dirichlet_gumbel_tau": 1.0,
+    "route_prior_weight": 0.1,
+    "route_sparsity_weight": 0.01,
     "convnet_type": "resnet32",
     "device" : ["0"],
     "seed": [1993],
     "project": "nips26"
 }
-

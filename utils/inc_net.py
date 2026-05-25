@@ -1270,7 +1270,14 @@ class TSAttention(nn.Module):
 class MoENet(BaseNet):
     def __init__(self, args, gradcam=False):
         super().__init__(args)
-        self.moe = Continual_MoE()
+        self.moe = Continual_MoE(
+            experts_num=args.get("moe_num_experts", 16),
+            top_k=args.get("moe_top_k", 2),
+            d_model=self.feature_dim,
+            ffn_num=args.get("moe_ffn_num", 64),
+            dirichlet_min_alpha=args.get("dirichlet_min_alpha", 1e-3),
+            gumbel_tau=args.get("dirichlet_gumbel_tau", 1.0),
+        )
         self.ln = nn.LayerNorm(self.feature_dim)
         
     @property
@@ -1282,6 +1289,30 @@ class MoENet(BaseNet):
         B, seq_len, d = x.shape
         gate = self.moe.get_gating(x.view(B*seq_len, -1))
         return gate
+
+    def get_route_params(self, x):
+        # Flatten all modality/time tokens before asking the MoE for route params.
+        x = torch.cat(list(x.values()), dim=1)
+        B, seq_len, d = x.shape
+        alpha, select_probs = self.moe.get_route_params(x.view(B*seq_len, -1))
+        return alpha, select_probs
+
+    def dirichlet_prior_loss(self, x, prior_alpha=None, prior_select_probs=None):
+        # The prior tensors are token-level, so they are compared after the same
+        # flattening used by the forward MoE call.
+        x = torch.cat(list(x.values()), dim=1)
+        B, seq_len, d = x.shape
+        return self.moe.dirichlet_prior_loss(
+            x.view(B*seq_len, -1),
+            prior_alpha=prior_alpha,
+            prior_select_probs=prior_select_probs,
+        )
+
+    def sparsity_loss(self, x):
+        # Apply sparsity at token level before sequence pooling.
+        x = torch.cat(list(x.values()), dim=1)
+        B, seq_len, d = x.shape
+        return self.moe.sparsity_loss(x.view(B*seq_len, -1))
     
     def get_load(self, x):
         x = torch.cat(list(x.values()), dim=1)
@@ -1452,6 +1483,4 @@ class AV_CIL_Net(BaseNet):
         temporal_attn_score = F.softmax(temporal_score, dim=1)
 
         return spatial_attn_score, temporal_attn_score
-
-
 
