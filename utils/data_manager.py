@@ -72,6 +72,10 @@ class DataManager(object):
             data.append(class_data)
             targets.append(class_targets)
 
+    
+        targets = np.concatenate(targets) if len(targets) != 0 else np.array([])
+        data = np.concatenate(data) if len(data) != 0 else np.array([])
+        
         
         appendent_data, appendent_targets = None, None
         if appendent is not None and len(appendent) != 0:
@@ -80,7 +84,7 @@ class DataManager(object):
 
 
         dataset = self.Dataset_class(
-            x,
+            data,
             targets,
             trsf,
             self.use_path,
@@ -203,7 +207,7 @@ class DummyDataset(Dataset):
     # def __init__(self, data, labels, trsf, use_path=False, aug=1):
     def __init__(
         self,
-        data_idxs,
+        data,
         labels,
         trsf,
         use_path=False,
@@ -212,7 +216,7 @@ class DummyDataset(Dataset):
     ):  
         # assert isinstance(data, dict), "Data type error!"
         self.aug = aug
-        self.data_idxs = data_idxs
+        self.data = data
         self.appendent_data = appendent_data
         self.labels = labels
         self.trsf = trsf
@@ -260,6 +264,7 @@ class AVE_DummyDataset(DummyDataset):
         appendent_data=None,
     ):
         super().__init__(data_idxs, labels, trsf, use_path, aug, appendent_data)
+        self.data_idxs = self.data
         self.m = 2
 
     def _load_data(self):
@@ -276,7 +281,7 @@ class AVE_DummyDataset(DummyDataset):
             sample = self.appendent_data[mem_idx]
         
         assert isinstance(sample, dict)
-        sample = {k: torch.as_tensor(v) for k,v in sample.items()}
+        sample = {k: torch.tensor(v) for k,v in sample.items()}
         return sample, self.labels[idx]
     
     def get_all_data(self):
