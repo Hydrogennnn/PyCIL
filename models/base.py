@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from utils.toolkit import tensor2numpy, accuracy
+from utils import ddp
 from scipy.spatial.distance import cdist
 import os
 
@@ -421,10 +422,13 @@ class BaseLearner(object):
 
     @property
     def feature_dim(self):
-        if isinstance(self._network, nn.DataParallel):
-            return self._network.module.feature_dim
-        else:
-            return self._network.feature_dim
+        return self._unwrap_network().feature_dim
+
+    def _unwrap_network(self):
+        network = ddp.unwrap_model(self._network)
+        if isinstance(network, nn.DataParallel):
+            return network.module
+        return network
 
     def build_rehearsal_memory(self, data_manager, per_class):
         if self._fixed_memory:
@@ -434,10 +438,12 @@ class BaseLearner(object):
             self._construct_exemplar(data_manager, per_class) #为新类贪心选 m 个代表样本
 
     def save_checkpoint(self, filename):
-        self._network.cpu()
+        if not ddp.is_main_process():
+            return
+        network = self._unwrap_network()
         save_dict = {
             "tasks": self._cur_task,
-            "model_state_dict": self._network.state_dict(),
+            "model_state_dict": network.state_dict(),
         }
         torch.save(save_dict, "{}_{}.pkl".format(filename, self._cur_task))
 
@@ -539,14 +545,9 @@ class BaseLearner(object):
         for _inputs, _targets in loader:
             _targets = _targets.numpy()
             _inputs = {k:v.to(self._device) for k,v in _inputs.items()}
-            if isinstance(self._network, nn.DataParallel):
-                _vectors = tensor2numpy(
-                    self._network.module.extract_vector(_inputs)
-                )
-            else:
-                _vectors = tensor2numpy(
-                    self._network.extract_vector(_inputs)
-                )
+            _vectors = tensor2numpy(
+                self._unwrap_network().extract_vector(_inputs)
+            )
 
             vectors.append(_vectors)
             targets.append(_targets)
