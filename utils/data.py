@@ -165,7 +165,7 @@ class AVE(iData):
         self.train_data_idx = split["train"]
         self.test_data_idx = split["test"]
         self.val_data_idx = split["val"]
-
+        
         self.all_targets = np.load("data/AVE/labels.npy", allow_pickle=True)
         self.train_targets = self.all_targets[self.train_data_idx]
         self.test_targets = self.all_targets[self.test_data_idx]

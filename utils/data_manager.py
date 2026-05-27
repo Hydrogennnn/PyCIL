@@ -278,17 +278,21 @@ class AVE_DummyDataset(DummyDataset):
         if idx < base_len:
             real_idx = self.data_idxs[idx]
             sample = {"m1": self.video_features[real_idx], "m2": self.audio_features[real_idx]}
+            sample = {k: torch.tensor(v) for k,v in sample.items()}
+            # sample['m2'] = sample['m2'].unsqueeze(0)
         else:
             mem_idx = idx - base_len
             sample = self.appendent_data[mem_idx]
+            sample = {k: torch.tensor(v) for k,v in sample.items()}
         
         assert isinstance(sample, dict)
-        sample = {k: torch.tensor(v) for k,v in sample.items()}
-        return sample, self.labels[idx]
-    
+        
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        return sample, label
+
     def get_all_data(self):
         data = []
-        for idx in tqdm(range(len(self))):
+        for idx in range(len(self)):
             sample, _ = self.__getitem__(idx)
             data.append(sample)
         return data

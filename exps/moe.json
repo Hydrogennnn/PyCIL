@@ -3,7 +3,7 @@
     "dataset": "ave",
     "memory_size": 340,
     "memory_per_class": 20,
-    "fixed_memory": true,
+    "fixed_memory": false,
     "shuffle": true,
     "init_cls": 7,
     "increment": 7,

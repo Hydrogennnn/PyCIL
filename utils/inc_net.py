@@ -1328,9 +1328,12 @@ class MoENet(BaseNet):
         return fc
 
     def forward(self, x):
+
         x = torch.cat(list(x.values()), dim=1)
         B, seq_len, d = x.shape
+        x_residual = x
         x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
+        x = x + x_residual
         x = self.ln(x)
         x = torch.mean(x, dim=1)
         # x = self.moe(x)
