@@ -17,7 +17,9 @@ from convs.ACL_buffer import RandomBuffer, activation_t
 from convs.linears import RecursiveLinear
 from typing import Dict, Any
 from backbones.continual_moe import Continual_MoE
+from backbones.TBN import TBN
 import torch.nn.functional as F
+from collections import OrderedDict
 
 def get_convnet(args, pretrained=False):
     name = args["convnet_type"].lower()
@@ -1270,12 +1272,28 @@ class TSAttention(nn.Module):
 class MoENet(BaseNet):
     def __init__(self, args, gradcam=False):
         super().__init__(args)
-        self.moe = Continual_MoE()
+        self.d_model = 768
+        self.feature_extractor = None
+        if args["dataset"] == 'mmea':
+            new_length = OrderedDict({
+                        ('RGB', 1),
+                        ('Gyro', 24),
+                        ('Acce', 24)
+                    })
+            self.feature_extractor = TBN(num_segments=8, modality=["RGB", "Gyro", "Acce"],
+            base_model='BNInception', new_length=new_length)
+            self.feature_extractor.freeze_fn('modalities')
+            self.feature_extractor.freeze_fn('partialbn_parameters')
+            self.d_model = 1024
+            
+            
+        self.moe = Continual_MoE(d_model=self.d_model)
         self.ln = nn.LayerNorm(self.feature_dim)
+
         
     @property
     def feature_dim(self):
-        return 768
+        return self.d_model
     
     def get_gating(self, x):
         x = torch.cat(list(x.values()), dim=1)
@@ -1291,11 +1309,24 @@ class MoENet(BaseNet):
         return load
     
     def extract_vector(self, x):
+        # x = torch.cat(list(x.values()), dim=1)
+        # B, seq_len, d = x.shape
+        # x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
+        # x = self.ln(x)
+        # x = torch.mean(x, dim=1)
+
+        
+        if self.feature_extractor is not None:
+            x = self.feature_extractor(x)
         x = torch.cat(list(x.values()), dim=1)
         B, seq_len, d = x.shape
+
+        x_residual = x
         x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
+        x = x + x_residual
         x = self.ln(x)
         x = torch.mean(x, dim=1)
+
         return x
         
     def update_fc(self, nb_classes):
@@ -1329,13 +1360,7 @@ class MoENet(BaseNet):
 
     def forward(self, x):
 
-        x = torch.cat(list(x.values()), dim=1)
-        B, seq_len, d = x.shape
-        x_residual = x
-        x = self.moe(x.view(B*seq_len, d)).view(B, -1, d)
-        x = x + x_residual
-        x = self.ln(x)
-        x = torch.mean(x, dim=1)
+        x = self.extract_vector(x)
         # x = self.moe(x)
         out = self.fc(x)
 
@@ -1345,6 +1370,88 @@ class MoENet(BaseNet):
 
 
 
+# class MMEA_Net(nn.Module):
+#     def __init__(self, num_segments, modality, base_model='BNInception',
+#                  new_length=None, consensus_type='avg', before_softmax=True,
+#                  dropout=0.8, midfusion='concat',):
+#         super().__init__()
+
+#         self.num_segments = num_segments
+#         self.modality = modality
+#         self.base_model = base_model
+#         self.new_length = new_length
+#         self.dropout = dropout
+#         self.before_softmax = before_softmax
+#         self.consensus_type = consensus_type
+#         self.midfusion = midfusion
+        
+#         if not before_softmax and consensus_type != 'avg':
+#             raise ValueError("Only avg consensus can be used after Softmax")
+        
+#         self.feature_extract_network = TBN(self.num_segments, self.modality,
+#                                            self.base_model, self.new_length, 
+#                                            self.dropout)
+
+#         self.fusion_network = Fusion_Network(1024, self.modality, self.midfusion, self.dropout)
+
+#         self.feature_extractor = nn.Sequential(
+#             self.feature_extract_network,
+#             self.fusion_network
+#         )
+
+#         self.fc = None
+        
+#         print(("""
+# Initializing TSN with base model: {}.
+# TSN Configurations:
+#     input_modality:     {}
+#     num_segments:       {}
+#     new_length:         {}
+#     consensus_module:   {}
+#     dropout_ratio:      {}
+#         """.format(base_model, self.modality, self.num_segments, self.feature_extract_network.new_length, 
+#                    consensus_type, self.dropout)))
+
+#     @property
+#     def feature_dim(self):
+#         if len(self.modality) > 1:
+#             return 512
+#         else:
+#             return 1024
+
+#     def extract_vector(self, x):
+#         return self.feature_extractor(x)['features']
+
+#     def forward(self, x):
+#         x = self.feature_extractor(x)
+#         out = self.fc(x['features'])
+#         out.update(x)
+
+#         return out
+
+#     def update_fc(self, nb_classes):
+#         fc = Classification_Network(1024, self.modality, nb_classes, self.consensus_type, 
+#                                     self.before_softmax, self.num_segments)
+
+#         if self.fc is not None:
+#             nb_output = self.fc.num_class
+#             weight = copy.deepcopy(self.fc.weight.data)
+#             bias = copy.deepcopy(self.fc.bias.data)
+#             fc.fc_action.weight.data[:nb_output] = weight
+#             fc.fc_action.bias.data[:nb_output] = bias
+
+#         del self.fc
+#         self.fc = fc
+
+#     def copy(self):
+#         return copy.deepcopy(self)
+
+#     def freeze(self):
+#         for param in self.parameters():
+#             param.requires_grad = False
+#         self.eval()
+
+#         return self
     
 class AV_CIL_Net(BaseNet):
     def __init__(self, args, pretrained, gradcam=False):

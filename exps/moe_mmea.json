@@ -1,0 +1,16 @@
+{
+    "prefix": "reproduce",
+    "dataset": "mmea",
+    "memory_size": 340,
+    "memory_per_class": 20,
+    "fixed_memory": false,
+    "shuffle": false,
+    "init_cls": 8,
+    "increment": 8,
+    "model_name": "moe",
+    "convnet_type": "resnet32",
+    "device" : ["0"],
+    "seed": [1993],
+    "project": "nips26"
+}
+

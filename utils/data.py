@@ -5,9 +5,11 @@ from utils.toolkit import split_images_labels
 from . import autoaugment
 from . import ops
 from sklearn.model_selection import train_test_split
-
+import os
 from .transforms import ArrayToTensor, DataStack, GroupNormalize, IdentityTransform, ImgStack, ToTorchFormatTensor, GroupScale, GroupCenterCrop
 import torch
+from backbones.TBN import TBN
+from collections import OrderedDict
 
 
 class iData(object):
@@ -165,12 +167,15 @@ class AVE(iData):
         self.train_data_idx = split["train"]
         self.test_data_idx = split["test"]
         self.val_data_idx = split["val"]
-        
+
         self.all_targets = np.load("data/AVE/labels.npy", allow_pickle=True)
         self.train_targets = self.all_targets[self.train_data_idx]
         self.test_targets = self.all_targets[self.test_data_idx]
         self.val_targets = self.all_targets[self.val_data_idx]
 
+        self.train_data = self.train_data_idx
+        self.test_data = self.test_data_idx
+        self.val_data = self.val_data_idx
 
 
 
@@ -211,18 +216,32 @@ class MMEA_CL(iData):
     ]
 
 
-    def __init__(self, model, train_list, test_list):
+    def __init__(self):
         self.modality = ["RGB", "Gyro", "Acce"]
         self.arch = "BNInception"
-        self.train_list = train_list
-        self.test_list = test_list
-        
-        self.crop_size = model.feature_extract_network.crop_size
-        self.scale_size = model.feature_extract_network.scale_size
-        self.input_mean = model.feature_extract_network.input_mean
-        self.input_std = model.feature_extract_network.input_std
-        self.data_length = model.feature_extract_network.new_length
-        self.train_augmentation = model.feature_extract_network.get_augmentation()
+        # self.train_list = train_list
+        # self.test_list = test_list
+        dataroot = "data/UESTC-MMEA-CL/"
+        self.train_list = os.path.join(dataroot, "mydataset_train.txt")
+        self.test_list = os.path.join(dataroot, "mydataset_test.txt")
+        self.val_list = os.path.join(dataroot, "mydataset_val.txt")
+
+
+
+        new_length = OrderedDict({
+                        ('RGB', 1),
+                        ('Gyro', 24),
+                        ('Acce', 24)
+                    })
+        model = TBN(num_segments=8, modality=["RGB", "Gyro", "Acce"],
+        base_model='BNInception', new_length=new_length)
+
+        self.crop_size = model.crop_size
+        self.scale_size = model.scale_size
+        self.input_mean = model.input_mean
+        self.input_std = model.input_std
+        self.data_length = model.new_length
+        self.train_augmentation = model.get_augmentation()
 
         self.train_trsf = {}
         self.test_trsf = {}
@@ -271,11 +290,13 @@ class MMEA_CL(iData):
                 ])
             
 
+        val_set = MMEADataSet(self.val_list)
         train_set = MMEADataSet(self.train_list)
         test_set = MMEADataSet(self.test_list)
 
-        self.train_data, self.test_data = np.array(train_set.video_list), np.array(test_set.video_list)
-        self.train_targets, self.test_targets = np.array(self._get_targets(train_set)), np.array(self._get_targets(test_set))
+        self.train_data, self.test_data, self.val_data = np.array(train_set.video_list), np.array(test_set.video_list), np.array(val_set.video_list)
+        self.train_targets, self.test_targets, self.val_targets = np.array(self._get_targets(train_set)), np.array(self._get_targets(test_set)), np.array(self._get_targets(val_set))
+        
 
     def _get_targets(self, dataset):
         """
@@ -291,7 +312,7 @@ class MMEADataSet(torch.utils.data.Dataset):
     def __init__(self, list_file):
         self.list_file = list_file
 
-        self._parse_list()
+        
 
         class MyDataset_VideoRecord():
 
@@ -314,6 +335,8 @@ class MMEADataSet(torch.utils.data.Dataset):
                 return int(self.data[3])
 
         self.MyDataset_VideoRecord = MyDataset_VideoRecord
+
+        self._parse_list()
 
     def _parse_list(self):
         

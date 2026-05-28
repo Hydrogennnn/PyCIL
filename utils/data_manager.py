@@ -5,11 +5,15 @@ from PIL import Image
 from torch.nn.functional import instance_norm
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE
+from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE, MMEA_CL
 from tqdm import tqdm
 import os
 from scipy import signal
+import pandas as pd
+from scipy.integrate import trapz
 import torch
+from numpy.random import randint
+from collections import OrderedDict
 
 class DataManager(object):
     def __init__(self, dataset_name, shuffle, seed, init_cls, increment, aug=1):
@@ -50,17 +54,9 @@ class DataManager(object):
             raise ValueError("Unknown data source {}.".format(source))
 
         if mode == "train":
-            trsf = transforms.Compose([*self._train_trsf, *self._common_trsf])
-        elif mode == "flip":
-            trsf = transforms.Compose(
-                [
-                    *self._test_trsf,
-                    transforms.RandomHorizontalFlip(p=1.0),
-                    *self._common_trsf,
-                ]
-            )
+            trsf = self._train_trsf
         elif mode == "test" or mode == "val":
-            trsf = transforms.Compose([*self._test_trsf, *self._common_trsf])
+            trsf = self._test_trsf
         else:
             raise ValueError("Unknown mode {}.".format(mode))
 
@@ -90,7 +86,7 @@ class DataManager(object):
             targets,
             trsf,
             self.use_path,
-            self.aug if source == "train" and mode == "train" else 1,
+            mode,
             appendent_data=appendent_data,
         )
         if ret_data:
@@ -131,11 +127,11 @@ class DataManager(object):
         # self._train_data, self._train_targets = idata.train_data, idata.train_targets
         # self._test_data, self._test_targets = idata.test_data, idata.test_targets
         # self._val_data, self._val_targets = idata.val_data, idata.val_targets
-        self._train_data = idata.train_data_idx
-        self._test_data = idata.test_data_idx
-        self._val_data = idata.val_data_idx
-        
-        
+        self._train_data = idata.train_data
+        self._test_data = idata.test_data
+        self._val_data = idata.val_data
+
+
         self._train_targets = idata.train_targets
         self._test_targets = idata.test_targets
         self._val_targets = idata.val_targets
@@ -213,11 +209,11 @@ class DummyDataset(Dataset):
         labels,
         trsf,
         use_path=False,
-        aug=1,
+        mode='train',
         appendent_data=None,
     ):  
         # assert isinstance(data, dict), "Data type error!"
-        self.aug = aug
+        self.mode = mode
         self.data = data
         self.appendent_data = appendent_data
         self.labels = labels
@@ -237,22 +233,6 @@ class DummyDataset(Dataset):
     def __getitem__(self, idx):
         pass
 
-    
-    # def __getitem__(self, idx):
-    #     if self.aug == 1:
-    #         if self.use_path:
-    #             image = self.trsf(pil_loader(self.data[idx]))
-    #         else:
-    #             image = self.trsf(Image.fromarray(self.data[idx]))
-    #         label = self.labels[idx]
-    #         return idx, image, label
-    #     else:
-    #         if self.use_path:
-    #             images = [self.trsf(pil_loader(self.data[idx])) for _ in range(self.aug)]
-    #         else:
-    #             images = [self.trsf(Image.fromarray(self.data[idx])) for _ in range(self.aug)]
-    #         label = self.labels[idx]
-    #         return idx, *images, label
 
 
 class AVE_DummyDataset(DummyDataset):
@@ -262,10 +242,10 @@ class AVE_DummyDataset(DummyDataset):
         labels,
         trsf,
         use_path=False,
-        aug=1,
+        mode='train',
         appendent_data=None,
     ):
-        super().__init__(data_idxs, labels, trsf, use_path, aug, appendent_data)
+        super().__init__(data_idxs, labels, trsf, use_path, mode, appendent_data)
         self.data_idxs = self.data
         self.m = 2
 
@@ -304,12 +284,29 @@ class MMEA_DummyDataset(DummyDataset):
         labels,
         trsf,
         use_path=False,
-        aug=1,
+        mode='train',
         appendent_data=None,
     ):
-        super().__init__(video_list, labels, trsf, use_path, aug, appendent_data)
+        super().__init__(video_list, labels, trsf, use_path, mode, appendent_data)
         self.video_list = self.data
         self.m = 3
+        self.transform = trsf
+        self.num_segments = 8
+        self.image_tmpl = {}
+        
+        self.modality = ["RGB", "Gyro", "Acce"]
+        for m in self.modality:
+            # Prepare dictionaries containing image name templates for each modality
+            if m in ['RGB', 'RGBDiff']:
+                self.image_tmpl[m] = "{:06d}.jpg"
+
+        self.mpu_path = "/opt/data/private/PyCIL/data/UESTC-MMEA-CL/sensor/"
+
+        self.new_length = OrderedDict({
+                        ('RGB', 1),
+                        ('Gyro', 24),
+                        ('Acce', 24)
+                    })
     
     def _mpu_data_convert(self, ori_mpu_data, acc_sensitivity=8192, gyro_sensitivity=16.4):
 
@@ -344,7 +341,7 @@ class MMEA_DummyDataset(DummyDataset):
         return angles.astype(np.float32)
     
     def _mpu_process(self, record):
-        file_path = record.path.replace('/home/amax/Downloads/whx/temporal-binding-network/dataset/data/', self.mpu_path) + '.csv'
+        file_path = record.path.replace('/opt/data/private/PyCIL/data/UESTC-MMEA-CL/frame/', self.mpu_path) + '.csv'
         try:
             mpu_datas = pd.read_csv(file_path, header=None)
             true_mpu_datas = []
@@ -361,7 +358,7 @@ class MMEA_DummyDataset(DummyDataset):
         except Exception:
             print('error loading gyro file:', file_path)    
     
-    def _load_data(self, modality, record, idx):
+    def my_load_data(self, modality, record, idx):
         if modality == 'RGB' or modality == 'RGBDiff':
             try:
                 return [Image.open(os.path.join(record.path, self.image_tmpl[modality].format(idx))).convert('RGB')]
@@ -377,7 +374,7 @@ class MMEA_DummyDataset(DummyDataset):
                 print('error loading flow image:', os.path.join(record.path, self.image_tmpl[modality].format('x/y', idx)))
 
         elif modality == 'Acce':
-            file_path = record.path.replace('/home/amax/Downloads/whx/temporal-binding-network/dataset/data/', self.mpu_path) + '.csv'
+            file_path = record.path.replace('/opt/data/private/PyCIL/data/UESTC-MMEA-CL/frame/', self.mpu_path) + '.csv'
             try:
                 mpu_data = self._process_acce_data[idx]
                 return mpu_data
@@ -385,7 +382,7 @@ class MMEA_DummyDataset(DummyDataset):
                 print('error loading gyro file:', file_path, idx)
 
         elif modality == 'Gyro':
-            file_path = record.path.replace('/home/amax/Downloads/whx/temporal-binding-network/dataset/data/', self.mpu_path) + '.csv'
+            file_path = record.path.replace('/opt/data/private/PyCIL/data/UESTC-MMEA-CL/frame/', self.mpu_path) + '.csv'
             try:
                 mpu_data = self._process_gyro_data[idx]
                 return mpu_data
@@ -460,7 +457,7 @@ class MMEA_DummyDataset(DummyDataset):
             img= self.get(m, record, segment_indices)
             input[m] = img
 
-        return index, input, self.labels[index]
+        return input, self.labels[index]
 
     def get(self, modality, record, indices):
 
@@ -469,7 +466,7 @@ class MMEA_DummyDataset(DummyDataset):
             for seg_ind in indices:
                 p = int(seg_ind)
                 for i in range(self.new_length[modality]):
-                    seg_imgs = self._load_data(modality, record, p)
+                    seg_imgs = self.my_load_data(modality, record, p+1)
                     images.extend(seg_imgs)
                     if p < record.num_frames[modality]:
                         p += 1
@@ -481,7 +478,7 @@ class MMEA_DummyDataset(DummyDataset):
                 mpu_data1 = []
                 p = int(seg_ind)
                 for i in range(self.new_length[modality]):
-                    single_mpu_data1 = self._load_data(modality, record, p)
+                    single_mpu_data1 = self.my_load_data(modality, record, p)
                     mpu_data1.append(single_mpu_data1)
                     if p < record.num_frames[modality]:
                         p += 1
@@ -496,7 +493,7 @@ class MMEA_DummyDataset(DummyDataset):
                 mpu_data2 = []
                 p = int(seg_ind)
                 for i in range(self.new_length[modality]):
-                    single_mpu_data2 = self._load_data(modality, record, p)
+                    single_mpu_data2 = self.my_load_data(modality, record, p)
                     mpu_data2.append(single_mpu_data2)
                     if p < record.num_frames[modality]:
                         p += 1
@@ -519,8 +516,8 @@ def _get_metadata(dataset_name):
     name = dataset_name.lower()
     if name == "ave":
         return AVE(), AVE_DummyDataset  
-    elif name == "mmea-cl":
-        raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
+    elif name == "mmea":
+        return MMEA_CL(), MMEA_DummyDataset
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
 

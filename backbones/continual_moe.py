@@ -170,13 +170,13 @@ class SparseDispatcher(object):
         return torch.split(self._nonzero_gates, self._part_sizes, dim=0)
 
 class Continual_MoE(nn.Module):
-    def __init__(self, ) -> None:
+    def __init__(self, d_model=768, experts_num=16, top_k=2) -> None:
         super().__init__()
-        self.experts_num=16
+        self.experts_num=experts_num
         self.register_buffer("mean", torch.tensor([0.0]))
         self.register_buffer("std", torch.tensor([1.0]))
-        self.top_k = 2
-        self.d_model = 768
+        self.top_k = top_k
+        self.d_model = d_model
         self.ffn_num = 64
         self.router = nn.Parameter(torch.zeros(self.d_model, self.experts_num), requires_grad=True)
         self.w_noise = nn.Parameter(torch.zeros(self.d_model, self.experts_num), requires_grad=True)
