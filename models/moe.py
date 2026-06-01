@@ -15,9 +15,9 @@ from utils import ddp
 import wandb
 import seaborn as sns
 import matplotlib.pyplot as plt
-
-
-
+from torch.distributions.multivariate_normal import MultivariateNormal
+import sys
+import math
 
 EPSILON = 1e-8
 
@@ -28,14 +28,18 @@ init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 100
+epochs = 50
 lrate = 1e-3
 milestones = [80, 120]
 lrate_decay = 0.1
 batch_size = 32
 weight_decay = 1e-4
-num_workers = 0
+num_workers = 4
 T = 2
+
+ca_epochs = 20
+ca_lr = 0.001
+ca_batchsize = 24
 
 
 class MoE(BaseLearner):
@@ -46,7 +50,7 @@ class MoE(BaseLearner):
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
         self._old_network = torch.load(
-            'save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+            'save/{}/task_{}_final_model.pkl'.format(self._dataset, self._cur_task),
             map_location=self._device,
         )
         self._known_classes = self._total_classes
@@ -158,8 +162,89 @@ class MoE(BaseLearner):
 
         return np.around(tensor2numpy(correct) * 100 / total, decimals=2), test_losses / len(loader)
     
-    
-    
+    def train_task_adaptive_prediction(self, model):
+        prog_bar = tqdm(range(ca_epochs), disable=not ddp.is_main_process())
+        model.train()
+        crct_num = self._total_classes
+        fc_params = ddp.unwrap_model(model).fc.parameters()
+        ca_optimizer = optim.AdamW(
+                fc_params,
+                lr=ca_lr,
+                weight_decay=weight_decay
+                )
+        
+        ca_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer=ca_optimizer, T_max=ca_epochs)
+
+        for epoch in prog_bar:
+            sampled_data = []
+            sampled_label = []
+            
+            num_sampled_pcls = ca_batchsize * 5
+
+            for c_id in range(self._total_classes):
+                for cluster in range(len(self.cls_mean[c_id])):
+                    mean = self.cls_mean[c_id][cluster]
+                    var = self.cls_cov[c_id][cluster]
+
+                    # 空簇或退化簇可能产生 0 方差。
+                    # 这种高斯分布要么无效，要么基本不提供有效信息，所以跳过。
+                    if var.mean() == 0:
+                        continue
+
+                    # 用该簇的方差构造对角协方差矩阵。
+                    # 额外加上 1e-4 * I，保证协方差矩阵足够正定，
+                    # 避免 MultivariateNormal 因数值问题报错。
+                    m = MultivariateNormal(mean.float(), (torch.diag(var) + 1e-4 * torch.eye(mean.shape[0]).to(mean.device)).float())
+                    sampled_data_single = m.sample(sample_shape=(num_sampled_pcls,))
+                    sampled_data.append(sampled_data_single)
+                    sampled_label.extend([c_id] * num_sampled_pcls)
+            
+            sampled_data = torch.cat(sampled_data, dim=0).float().to(self._device)
+            sampled_label = torch.tensor(sampled_label).long().to(self._device)
+            
+            inputs = sampled_data
+            targets = sampled_label
+            # 打乱合成特征，让每个 mini-batch 尽量混合不同类别和不同 centroid。
+            sf_indexes = torch.randperm(inputs.size(0))
+            inputs = inputs[sf_indexes]
+            targets = targets[sf_indexes]
+
+            tot_loss = 0.0
+            for _iter in range(crct_num):
+                # 从合成特征池中切出一个 mini-batch。
+                # 注意：这里复用了 num_sampled_pcls 作为 mini-batch size。
+                inp = inputs[_iter * num_sampled_pcls:(_iter + 1) * num_sampled_pcls]
+                tgt = targets[_iter * num_sampled_pcls:(_iter + 1) * num_sampled_pcls]
+
+                # fc_only=True 表示 inp 已经是提取好的 pre_logits 特征。
+                # 模型会跳过 ViT/prompt 的前向过程，只执行分类器侧的层来产生 logits。
+                outputs = model(inp, fc_only=True)
+                logits = outputs['logits']
+
+                # 对合成特征做标准交叉熵训练。
+                # 这就是分类器校准的核心目标：重新平衡所有已见类别的 logits。
+                loss = F.cross_entropy(logits, tgt)  # base criterion (CrossEntropyLoss)
+
+                if not math.isfinite(loss.item()):
+                    print("Loss is {}, stopping training".format(loss.item()))
+                    sys.exit(1)
+
+                ca_optimizer.zero_grad()
+                loss.backward()
+                ca_optimizer.step()
+                tot_loss += loss.item()
+                torch.cuda.synchronize()
+            
+            ca_scheduler.step()
+
+            info = "Adapt FC, Epoch {}/{} => Loss {:.3f}".format(
+                    epoch + 1,
+                    ca_epochs,
+                    tot_loss / crct_num
+                )
+
+            prog_bar.set_description(info)
+
     def get_loss(self, inputs, targets):
         details = {}
         logits = self._network(inputs)["logits"]
@@ -228,7 +313,7 @@ class MoE(BaseLearner):
             np.arange(self._known_classes, self._total_classes),
             source="train",
             mode="train",
-            appendent=self._get_memory(),
+            # appendent=self._get_memory(),
         )
         train_sampler = ddp.make_sampler(train_dataset, shuffle=True)
         self.train_loader = DataLoader(
@@ -237,6 +322,7 @@ class MoE(BaseLearner):
             shuffle=train_sampler is None,
             sampler=train_sampler,
             num_workers=num_workers,
+            pin_memory=True
         )
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
@@ -246,7 +332,7 @@ class MoE(BaseLearner):
         )
         
         val_dataset = data_manager.get_dataset(
-            np.arange(0, self._total_classes), source="val", mode="val"
+            np.arange(self._known_classes, self._total_classes), source="val", mode="val"
         )
         
         self.val_loader = DataLoader(
@@ -272,15 +358,26 @@ class MoE(BaseLearner):
         self._train(self.train_loader, self.val_loader)
         self._network = ddp.unwrap_model(self._network)
         ddp.barrier()
-        self._network = torch.load(
-            'save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
-            map_location=self._device,
-        )
+        # self._network = torch.load(
+        #     'save/{}/task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+        #     map_location=self._device,
+        # )
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
+        self.build_multi_centroid(data_manager)
 
+        if ddp.is_main_process():
+            self.visualize_logits(self._network, self.test_loader)
         if self._cur_task > 0:
-            self._network.weight_align(self._total_classes - self._known_classes)
-    
+            # self._network.weight_align(self._total_classes - self._known_classes)
+            self._network = ddp.wrap_model(self._network, self._device, self.args)
+            self.train_task_adaptive_prediction(self._network)
+            self._network = ddp.unwrap_model(self._network)
+
+        if ddp.is_main_process():
+            save_dir = os.path.join("save", self._dataset)
+            save_path = os.path.join(save_dir, 'task_{}_final_model.pkl'.format(self._cur_task))
+            torch.save(ddp.unwrap_model(self._network), save_path)
+            self.visualize_logits(self._network, self.test_loader)
         
 
 
@@ -314,15 +411,23 @@ class MoE(BaseLearner):
         prog_bar = tqdm(range(init_epoch), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
+
+            if self._dataset == "mmea":
+                self._network.feature_extractor.freeze_fn('partialbn_statistics')
+                self._network.feature_extractor.freeze_fn('bn_statistics')
+
             if hasattr(train_loader.sampler, "set_epoch"):
                 train_loader.sampler.set_epoch(epoch)
+            
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
             for i, (inputs, targets) in enumerate(train_loader):
+                print("forwarding batch {}, epoch {}".format(i, epoch))
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
+                
                 logits = self._network(inputs)["logits"]
-
+                print("forwarded batch {}, epoch {}".format(i, epoch))
                 loss = F.cross_entropy(logits, targets)
                 optimizer.zero_grad()
                 loss.backward()
@@ -373,6 +478,10 @@ class MoE(BaseLearner):
         prog_bar = tqdm(range(epochs), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
+            if self._dataset == "mmea":
+                self._network.feature_extractor.freeze_fn('partialbn_statistics')
+                self._network.feature_extractor.freeze_fn('bn_statistics')
+
             if hasattr(train_loader.sampler, "set_epoch"):
                 train_loader.sampler.set_epoch(epoch)
             self._network.train()
@@ -441,9 +550,7 @@ class MoE(BaseLearner):
                 })
             
             prog_bar.set_description(info)
-        if ddp.is_main_process():
-            self.visualize_logits(self._network, self.test_loader)
-            self.visualize_gating(self._network, self.test_loader)
+        
         logging.info(info)
         
 

@@ -1358,9 +1358,9 @@ class MoENet(BaseNet):
 
         return fc
 
-    def forward(self, x):
-
-        x = self.extract_vector(x)
+    def forward(self, x, fc_only=False):
+        if fc_only is False:
+            x = self.extract_vector(x)
         # x = self.moe(x)
         out = self.fc(x)
 

@@ -94,30 +94,7 @@ class DataManager(object):
             return data, targets, dataset
         else:
             return dataset
-        # for idx in indices:
-        #     if m_rate is None:
-        #         class_data, class_targets = self._select(
-        #             x, y, low_range=idx, high_range=idx + 1
-        #         )
-        #     else:
-        #         class_data, class_targets = self._select_rmm(
-        #             x, y, low_range=idx, high_range=idx + 1, m_rate=m_rate
-        #         )
-        #     data.append(class_data)
-        #     targets.append(class_targets)
-
-        # if appendent is not None and len(appendent) != 0:
-        #     appendent_data, appendent_targets = appendent
-        #     data.append(appendent_data)
-        #     targets.append(appendent_targets)
-            
-        # data, targets = np.concatenate(data), np.concatenate(targets)
-
-        # if ret_data:
-        #     return data, targets, DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
-        # else:
-        #     return DummyDataset(data, targets, trsf, self.use_path,self.aug if source == "train" and mode == "train" else 1)
-
+        
 
     def _setup_data(self, dataset_name, shuffle, seed):
         idata, self.Dataset_class = _get_metadata(dataset_name)
@@ -233,6 +210,13 @@ class DummyDataset(Dataset):
     def __getitem__(self, idx):
         pass
 
+    def get_all_data(self):
+        data = []
+        for idx in range(len(self)):
+            sample, _ = self.__getitem__(idx)
+            data.append(sample)
+        return data
+
 
 
 class AVE_DummyDataset(DummyDataset):
@@ -270,12 +254,7 @@ class AVE_DummyDataset(DummyDataset):
         label = torch.tensor(self.labels[idx], dtype=torch.long)
         return sample, label
 
-    def get_all_data(self):
-        data = []
-        for idx in range(len(self)):
-            sample, _ = self.__getitem__(idx)
-            data.append(sample)
-        return data
+
 
 class MMEA_DummyDataset(DummyDataset):
     def __init__(

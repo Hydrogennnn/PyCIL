@@ -397,6 +397,9 @@ class BaseLearner(object):
         self._data_memory, self._targets_memory = np.array([]), np.array([])
         self.topk = 5
 
+        self.cls_mean = dict()
+        self.cls_cov = dict()
+
         self._memory_size = args["memory_size"]
         self._memory_per_class = args.get("memory_per_class", None)
         self._fixed_memory = args.get("fixed_memory", False)
@@ -436,6 +439,32 @@ class BaseLearner(object):
         else:
             self._reduce_exemplar(data_manager, per_class) # 旧类每类只保留前 m 个样本
             self._construct_exemplar(data_manager, per_class) #为新类贪心选 m 个代表样本
+
+    def build_multi_centroid(self, data_manager, n_clusters=10):
+        logging.info("Constructing multi_centroids...")
+        for cls_idx in range(self._known_classes, self._total_classes):
+            class_dset = data_manager.get_dataset(
+                np.arange(cls_idx, cls_idx+1), source="train", mode="test"
+            )
+            class_loader = DataLoader(
+                class_dset, batch_size=batch_size, shuffle=False, num_workers=4
+            ) 
+            vectors, _ = self._extract_vectors(class_loader)
+            from sklearn.cluster import KMeans
+            kmeans = KMeans(n_clusters=n_clusters)
+            kmeans.fit(vectors)
+            cluster_lables = kmeans.labels_
+            cluster_means = []
+            cluster_vars = []
+            for i in range(n_clusters):
+               cluster_data = vectors[cluster_lables == i]
+               cluster_mean = torch.tensor(np.mean(cluster_data, axis=0), dtype=torch.float64).to(self._device)
+               cluster_var = torch.tensor(np.var(cluster_data, axis=0), dtype=torch.float64).to(self._device)
+               cluster_means.append(cluster_mean)
+               cluster_vars.append(cluster_var)
+            
+            self.cls_mean[cls_idx] = cluster_means
+            self.cls_cov[cls_idx] = cluster_vars
 
     def save_checkpoint(self, filename):
         if not ddp.is_main_process():
