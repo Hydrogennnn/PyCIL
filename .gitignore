@@ -5,3 +5,4 @@ logs/
 wandb/
 save/
 *.log
+cache/

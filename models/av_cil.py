@@ -24,7 +24,7 @@ EPSILON = 1e-8
 
 init_epoch = 200
 init_lr = 1e-3
-init_milestones = [60, 120, 170]
+init_milestones = [100]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
@@ -124,18 +124,19 @@ class AVCIL(BaseLearner):
         data_batch_size = labels.shape[0]
         exemplar_data_batch_size = exemplar_labels.shape[0]
 
-        visual = data["video"]
-        audio = data["audio"]
-        exemplar_visual = exemplar_data["video"]
-        exemplar_audio = exemplar_data["audio"]
+
+        visual = data["m1"]
+        audio = data["m2"]
+        exemplar_visual = exemplar_data["m1"]
+        exemplar_audio = exemplar_data["m2"]
 
         total_visual = torch.cat((visual, exemplar_visual))
         total_audio = torch.cat((audio, exemplar_audio))
         total_visual = total_visual.to(self._device)
         total_audio = total_audio.to(self._device)
 
-        inputs = {"video": total_visual,
-                  "audio": total_audio}
+        inputs = {"m1": total_visual,
+                  "m2": total_audio}
         outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
         out = outputs["logits"]
         audio_feature = outputs["audio_feature"]
@@ -285,10 +286,10 @@ class AVCIL(BaseLearner):
         self._train(self.train_loader, self.val_loader)
         self._network = ddp.unwrap_model(self._network)
         ddp.barrier()
-        self._network = torch.load(
-            'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
-            map_location=self._device,
-        )
+        # self._network = torch.load(
+        #     'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+        #     map_location=self._device,
+        # )
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
 
         # if self._cur_task > 0:
@@ -346,22 +347,22 @@ class AVCIL(BaseLearner):
                 lr=init_lr,
                 weight_decay=init_weight_decay,
             )
-            scheduler = optim.lr_scheduler.MultiStepLR(
-                optimizer=optimizer, milestones=init_milestones, gamma=init_lr_decay
-            )
-            self._init_train(train_loader, val_loader, optimizer, scheduler)
+            # scheduler = optim.lr_scheduler.MultiStepLR(
+            #     optimizer=optimizer, milestones=init_milestones, gamma=init_lr_decay
+            # )
+            self._init_train(train_loader, val_loader, optimizer)
         else:
             optimizer = optim.Adam(
                 self._network.parameters(),
                 lr=lrate,
                 weight_decay=weight_decay,
             )  # 1e-5
-            scheduler = optim.lr_scheduler.MultiStepLR(
-                optimizer=optimizer, milestones=milestones, gamma=lrate_decay
-            )
-            self._update_representation(train_loader, val_loader, optimizer, scheduler)
+            # scheduler = optim.lr_scheduler.MultiStepLR(
+            #     optimizer=optimizer, milestones=milestones, gamma=lrate_decay
+            # )
+            self._update_representation(train_loader, val_loader, optimizer)
 
-    def _init_train(self, train_loader, val_loader, optimizer, scheduler):
+    def _init_train(self, train_loader, val_loader, optimizer):
         prog_bar = tqdm(range(init_epoch), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
@@ -372,7 +373,6 @@ class AVCIL(BaseLearner):
             correct, total = 0, 0
             for i, (inputs, targets) in enumerate(train_loader):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
-                # logits = self._network(inputs)["logits"]
                 logits = self._network(inputs)["logits"]
                 loss = F.cross_entropy(logits, targets)
                 optimizer.zero_grad()
@@ -384,7 +384,7 @@ class AVCIL(BaseLearner):
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
 
-            scheduler.step()
+            adjust_learning_rate(optimizer, epoch)
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
             if epoch % 5 == 0:
@@ -420,7 +420,7 @@ class AVCIL(BaseLearner):
 
         logging.info(info)
 
-    def _update_representation(self, train_loader, val_loader, optimizer, scheduler):
+    def _update_representation(self, train_loader, val_loader, optimizer):
         # prog_bar = tqdm(range(epochs))
         prog_bar = tqdm(range(epochs), disable=not ddp.is_main_process())
         best_acc = -1e9

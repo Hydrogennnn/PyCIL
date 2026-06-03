@@ -243,7 +243,7 @@ class AVE_DummyDataset(DummyDataset):
             real_idx = self.data_idxs[idx]
             sample = {"m1": self.video_features[real_idx], "m2": self.audio_features[real_idx]}
             sample = {k: torch.tensor(v) for k,v in sample.items()}
-            # sample['m2'] = sample['m2'].unsqueeze(0)
+            sample['m2'] = torch.mean(sample['m2'], dim=0)
         else:
             mem_idx = idx - base_len
             sample = self.appendent_data[mem_idx]

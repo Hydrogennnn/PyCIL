@@ -423,11 +423,8 @@ class MoE(BaseLearner):
             losses = 0.0
             correct, total = 0, 0
             for i, (inputs, targets) in enumerate(train_loader):
-                print("forwarding batch {}, epoch {}".format(i, epoch))
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
-                
                 logits = self._network(inputs)["logits"]
-                print("forwarded batch {}, epoch {}".format(i, epoch))
                 loss = F.cross_entropy(logits, targets)
                 optimizer.zero_grad()
                 loss.backward()

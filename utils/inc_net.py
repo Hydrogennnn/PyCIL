@@ -1503,9 +1503,8 @@ class AV_CIL_Net(BaseNet):
 
     def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False):
 
-        visual = inputs["video"]
-        audio = inputs["audio"]
-
+        visual = inputs["m1"]
+        audio = inputs["m2"]
         visual = visual.view(visual.shape[0], 8, -1, 768)
         spatial_attn_score, temporal_attn_score = self.audio_visual_attention(audio, visual)
         visual_pooled_feature = torch.sum(spatial_attn_score * visual, dim=2)
