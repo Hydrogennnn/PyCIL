@@ -1458,8 +1458,13 @@ class AV_CIL_Net(BaseNet):
         super().__init__(args)
 
 
-        self.audio_proj = nn.Linear(768, 768)
-        self.visual_proj = nn.Linear(768, 768)
+        # self.audio_proj = nn.Linear(768, 768)
+        # self.visual_proj = nn.Linear(768, 768)
+        self.v_mu_proj = nn.Linear(768, 64)
+        self.v_logvar_proj = nn.Linear(768, 64)
+        self.a_mu_proj = nn.Linear(768, 64)
+        self.a_logvar_proj = nn.Linear(768, 64)
+
         self.attn_audio_proj = nn.Linear(768, 768)
         self.attn_visual_proj = nn.Linear(768, 768)
         
@@ -1501,7 +1506,7 @@ class AV_CIL_Net(BaseNet):
         return fc
     
 
-    def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False):
+    def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, out_dist=False):
 
         visual = inputs["m1"]
         audio = inputs["m2"]
@@ -1510,8 +1515,20 @@ class AV_CIL_Net(BaseNet):
         visual_pooled_feature = torch.sum(spatial_attn_score * visual, dim=2)
         visual_pooled_feature = torch.sum(temporal_attn_score * visual_pooled_feature, dim=1)
         
-        audio_feature = F.relu(self.audio_proj(audio))
-        visual_feature = F.relu(self.visual_proj(visual_pooled_feature))
+        # audio_feature = F.relu(self.audio_proj(audio))
+        # visual_feature = F.relu(self.visual_proj(visual_pooled_feature))
+    
+        mu_v = self.v_mu_proj(visual_pooled_feature)
+        logvar_v = self.v_logvar_proj(visual_pooled_feature)
+        visual_feature = self._reparameterize(mu_v, logvar_v)
+
+
+        mu_a = self.a_mu_proj(audio)
+        logvar_a = self.a_logvar_proj(audio)
+        audio_feature = self._reparameterize(mu_a, logvar_a)
+
+
+
         audio_visual_features = visual_feature + audio_feature
         
         logits = self.fc(audio_visual_features)["logits"]
@@ -1539,6 +1556,12 @@ class AV_CIL_Net(BaseNet):
         if out_attn_score:
             outputs["spatial_attn_score"] = spatial_attn_score
             outputs["temporal_attn_score"] = temporal_attn_score
+
+        if out_dist:
+            outputs["mu_v"] = mu_v
+            outputs["logvar_v"] = logvar_v
+            outputs["mu_a"] = mu_a
+            outputs["logvar_a"] = logvar_a
         return outputs
 
 
@@ -1561,6 +1584,12 @@ class AV_CIL_Net(BaseNet):
         temporal_attn_score = F.softmax(temporal_score, dim=1)
 
         return spatial_attn_score, temporal_attn_score
+
+    def _reparameterize(self, mu, logvar):
+        std = torch.exp(logvar).sqrt()
+        epsilon = torch.randn_like(std)
+        sampler = epsilon * std
+        return mu + sampler
 
 
 
