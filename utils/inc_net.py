@@ -20,6 +20,10 @@ from backbones.continual_moe import Continual_MoE
 from backbones.TBN import TBN
 import torch.nn.functional as F
 from collections import OrderedDict
+from .transforms import ChannelGate
+
+
+
 
 def get_convnet(args, pretrained=False):
     name = args["convnet_type"].lower()
@@ -1460,17 +1464,23 @@ class AV_CIL_Net(BaseNet):
 
         # self.audio_proj = nn.Linear(768, 768)
         # self.visual_proj = nn.Linear(768, 768)
-        self.v_mu_proj = nn.Linear(768, 64)
-        self.v_logvar_proj = nn.Linear(768, 64)
-        self.a_mu_proj = nn.Linear(768, 64)
-        self.a_logvar_proj = nn.Linear(768, 64)
+        self.v_mu_proj = nn.Linear(768, 128)
+        self.v_logvar_proj = nn.Linear(768, 128)
+        self.a_mu_proj = nn.Linear(768, 128)
+        self.a_logvar_proj = nn.Linear(768, 128)
 
         self.attn_audio_proj = nn.Linear(768, 768)
         self.attn_visual_proj = nn.Linear(768, 768)
+
+        self.mu=nn.Linear(128,128)
+        self.logvar=nn.Linear(128,128)
+
+        # 两模态门控融合模块。输入一般为 [B, 2, 128]，输出融合特征 [B, 128]。
+        self.fusion=ChannelGate(3,3,'avg')
         
     @property
     def feature_dim(self):
-        return 768
+        return 128
     
     def extract_vector(self, x):
         outputs = self(x, out_features=True, out_features_norm=True)        
@@ -1528,10 +1538,37 @@ class AV_CIL_Net(BaseNet):
         audio_feature = self._reparameterize(mu_a, logvar_a)
 
 
+        # 将 log 方差转成方差/不确定性尺度，形状仍为 [B, 128]。
+        var_a=torch.exp(logvar_a)
+        var_v=torch.exp(logvar_v)
+        # 基于两个模态的方差计算动态融合权重。
+        # torch.stack([img_var, txt_var]) 后形状为 [2, B, 128]，
+        # softmax(dim=0) 表示在两个模态之间按每个样本、每个维度归一化。
+        weight=torch.softmax(torch.stack([var_v, var_a]), dim=0)
+        # 注意这里是交叉赋权：
+        # img_w 来自 weight[1]，txt_w 来自 weight[0]，二者形状均为 [B, 128]。
+        v_w=weight[1]
+        a_w=weight[0]
 
-        audio_visual_features = visual_feature + audio_feature
+        # 对单模态均值进行不确定性感知加权，输出均为 [B, 128]。
+        feature_a=mu_a*a_w
+        feature_v=mu_v*v_w
+
+
+        # 将两个模态堆叠成融合模块输入：[B, 2, 128]。
+        feature=torch.stack((feature_a,feature_v),dim=1)
+        # 门控融合得到融合特征：[B, 128]。
+        feature_fusion=self.fusion(feature)
+        # 融合特征的高斯分布参数：[B, 128]。
+        mu=self.mu(feature_fusion)
+        logvar=self.logvar(feature_fusion)
+        # 从融合分布采样：[B, 128]。
+        z=self._reparameterize(mu,logvar)
+        # 信息瓶颈辅助分类 logits：[B, 3]。
+        # z=self.IB_classfier(z)
+        logits = self.fc(z)["logits"]
         
-        logits = self.fc(audio_visual_features)["logits"]
+        
         outputs = {}
         # if AFC_train_out:
         #     audio_feature.retain_grad()
@@ -1545,10 +1582,10 @@ class AV_CIL_Net(BaseNet):
         if out_features:
             if out_features_norm:
                 # outputs += (F.normalize(audio_visual_features),)
-                outputs["audio_visual_features"] = F.normalize(audio_visual_features)
+                outputs["audio_visual_features"] = F.normalize(z)
             else:
                 # outputs += (audio_visual_features,)
-                outputs["audio_visual_features"] = audio_visual_features
+                outputs["audio_visual_features"] = z
         if out_feature_before_fusion:
             # outputs += (F.normalize(audio_feature), F.normalize(visual_feature))
             outputs["visual_feature"] = F.normalize(visual_feature)
@@ -1562,6 +1599,9 @@ class AV_CIL_Net(BaseNet):
             outputs["logvar_v"] = logvar_v
             outputs["mu_a"] = mu_a
             outputs["logvar_a"] = logvar_a
+            outputs["mu_fusion"] = mu
+            outputs["logvar_fusion"] = logvar
+
         return outputs
 
 

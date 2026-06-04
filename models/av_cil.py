@@ -42,10 +42,36 @@ instance_contrastive_temperature = 0.05
 class_contrastive_temperature = 0.05
 
 
+
+class Contrastive_loss(nn.Module):
+    def __init__(self,tau):
+        super(Contrastive_loss,self).__init__()
+        self.tau=tau
+
+    def sim(self,z1:torch.Tensor,z2:torch.Tensor):
+        z1 = F.normalize(z1)
+        z2 = F.normalize(z2)
+        return torch.mm(z1,z2.t())
+    
+    def semi_loss(self,z1:torch.Tensor,z2:torch.Tensor):
+        f=lambda x: torch.exp(x/self.tau)
+        refl_sim = f(self.sim(z1,z2))
+        between_sim=f(self.sim(z1,z2))
+
+        return -torch.log(between_sim.diag()/(refl_sim.sum(1)+between_sim.sum(1)-refl_sim.diag()))
+    
+    def forward(self,z1:torch.Tensor,z2:torch.Tensor,mean:bool=True):
+        l1=self.semi_loss(z1,z2)
+        l2=self.semi_loss(z2,z1)
+        ret=(l1+l2)*0.5
+        ret=ret.mean() if mean else ret.sum()
+        return ret
+
 class AVCIL(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
         self._network = AV_CIL_Net(args, False)
+
 
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
@@ -137,7 +163,7 @@ class AVCIL(BaseLearner):
 
         inputs = {"m1": total_visual,
                   "m2": total_audio}
-        outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
+        outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True, out_dist=True)
         out = outputs["logits"]
         audio_feature = outputs["audio_feature"]
         visual_feature = outputs["visual_feature"]
@@ -152,12 +178,27 @@ class AVCIL(BaseLearner):
             old_temporal_attn_score = old_temporal_attn_score.detach()
 
         # if args.instance_contrastive:
-        instance_contra_loss = self.cal_contrastive_loss(audio_feature, visual_feature, temperature=instance_contrastive_temperature)
+        con_loss = self.con_loss(outputs["mu_v"], outputs["logvar_v"], outputs["mu_a"], outputs["logvar_a"])
+        # instance_contra_loss = self.cal_contrastive_loss(audio_feature, visual_feature, temperature=instance_contrastive_temperature)
                 
         # if args.class_contrastive:
-        all_labels = torch.cat((labels, exemplar_labels))
-        class_contra_loss = self.class_contrastive_loss(audio_feature, visual_feature, all_labels, temperature=class_contrastive_temperature)
+        modal_similarity_loss = KL_regular(outputs["mu_v"], outputs["logvar_v"], outputs["mu_a"], outputs["logvar_a"])
+        # all_labels = torch.cat((labels, exemplar_labels))
+        # class_contra_loss = self.class_contrastive_loss(audio_feature, visual_feature, all_labels, temperature=class_contrastive_temperature)
         
+
+        # KL Loss
+        v_kl_loss = -(1 + outputs["logvar_v"] - outputs["mu_v"].pow(2) - outputs["logvar_v"].exp()) / 2  
+        v_kl_loss = v_kl_loss.sum(dim=1).mean()
+
+        a_kl_loss = -(1 + outputs["logvar_a"] - outputs["mu_a"].pow(2) - outputs["logvar_a"].exp()) / 2  
+        a_kl_loss = a_kl_loss.sum(dim=1).mean()
+
+        v_a_kl_loss = -(1 + outputs["logvar_fusion"] - outputs["mu_fusion"].pow(2) - outputs["logvar_fusion"].exp()) / 2
+        v_a_kl_loss = v_a_kl_loss.sum(dim=1).mean()
+
+        tot_kl_loss = v_kl_loss + a_kl_loss + v_a_kl_loss
+
         # if args.attn_score_distil:
         exem_spatial_attn_score = spatial_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(2, 3)
         exem_spatial_attn_score = exem_spatial_attn_score.reshape(-1, exem_spatial_attn_score.shape[-1])
@@ -202,14 +243,27 @@ class AVCIL(BaseLearner):
             loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (T**2)
         loss_KD = loss_KD.sum()
         loss = loss_CE + loss_KD
+        details['CE_loss'] = loss_CE.item()
+        details['KD_loss'] = loss_KD.item()
+
         # if args.instance_contrastive:
-        loss += 0.5 * instance_contra_loss
+        loss += 0.5 * con_loss
+        details['con_loss'] = con_loss.item()
         # if args.class_contrastive:
-        loss += 1.0* class_contra_loss
+        loss += 1.0* modal_similarity_loss
+        details['modal_similarity_loss'] = modal_similarity_loss.item()
+        # kl loss
+        loss += 0.1 * tot_kl_loss
+        details['tot_kl_loss'] = tot_kl_loss.item()
+
         # if args.attn_score_distil:
         loss += 0.5 * spatial_attn_dist_loss + (1 - 0.5) * temporal_attn_dist_loss
+        details['atten_dist_loss'] = (0.5 * spatial_attn_dist_loss + (1 - 0.5) * temporal_attn_dist_loss).item()
+        
+        details['tot_loss'] = loss.item()
 
-        return loss
+
+        return loss, details
     
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -295,6 +349,33 @@ class AVCIL(BaseLearner):
         # if self._cur_task > 0:
             # self._network.weight_align(self._total_classes - self._known_classes)
     
+
+    def con_loss(self, v_mu,v_logvar,a_mu,a_logvar):
+        Conloss=Contrastive_loss(0.5)
+        while True:
+            v_z1 = self.reparameterise(v_mu, v_logvar)
+            v_z2 = self.reparameterise(v_mu, v_logvar)
+            
+            if not np.array_equal(v_z1, v_z2):
+                break 
+        while True:
+            a_z1=self.reparameterise(a_mu,a_logvar)
+            a_z2=self.reparameterise(a_mu,a_logvar)
+            
+            if not np.array_equal(a_z1, a_z2):
+                break 
+
+
+        loss_v=Conloss(v_z1,v_z2)
+        loss_a=Conloss(a_z1,a_z2)
+        
+        return loss_v+loss_a
+
+    def reparameterise(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+        return z
         
     def cal_contrastive_loss(self, feature_1, feature_2, temperature=0.1):
         # (BS, BS)
@@ -439,12 +520,14 @@ class AVCIL(BaseLearner):
                 labels = labels.to(self._device)
                 exemplar_data, exemplar_labels = prev
                 exemplar_labels = exemplar_labels.to(self._device)
-                loss = self.get_loss(data, labels, exemplar_data, exemplar_labels)
+                loss, details = self.get_loss(data, labels, exemplar_data, exemplar_labels)
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                loss_details['tot_loss'] += loss.item()
+                for k, v in details.items():
+                    loss_details[k] += v
+                # loss_details['tot_loss'] += loss.item()
             
             adjust_learning_rate(optimizer, epoch)
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
@@ -460,17 +543,20 @@ class AVCIL(BaseLearner):
                 best_acc = val_acc
                 if ddp.is_main_process():
                     print(f"save best model at epoch {epoch} with acc {val_acc}")
+            
+            log_loss = {}
+            for k, v in loss_details.items():
+                loss_details[k] /= len(train_loader)
+                log_loss[f"train/task_{self._cur_task}_{k}"] = loss_details[k]
 
+            log_info = {
+                # f"train/task_{self._cur_task}_loss" : loss_details['tot_loss'] / len(train_loader),
+                f"eval/task_{self._cur_task}_acc" : val_acc,
+            }
+            log_info.update(log_loss)
+            
             if ddp.is_main_process():
-                wandb.log({
-                    # f"train/task_{self._cur_task}_acc": train_acc,
-                    f"train/task_{self._cur_task}_loss" : loss_details['tot_loss'] / len(train_loader),
-                    # f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
-                    # f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
-                    # f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
-                    f"eval/task_{self._cur_task}_acc" : val_acc,
-                    # f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
-                })
+                wandb.log(log_info)
             
             # prog_bar.set_description(info)
         # self.visualize_logits(self._network, self.test_loader)
@@ -492,3 +578,10 @@ def adjust_learning_rate(optimizer, epoch):
         print('Reduce lr from {} to {}'.format(current_lr, new_lr))
         for param_group in optimizer.param_groups: 
             param_group['lr'] = new_lr
+
+def KL_regular(mu_1,logvar_1,mu_2,logvar_2):
+    var_1=torch.exp(logvar_1)
+    var_2=torch.exp(logvar_2)
+    KL_loss=logvar_2-logvar_1+((var_1.pow(2)+(mu_1-mu_2).pow(2))/(2*var_2.pow(2)))-0.5
+    KL_loss=KL_loss.sum(dim=1).mean()
+    return KL_loss
