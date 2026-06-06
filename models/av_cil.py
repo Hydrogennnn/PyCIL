@@ -285,7 +285,7 @@ class AVCIL(BaseLearner):
         class_num_per_step = self._increment
         old_out = old_out[:,:last_step_out_class_num]
         
-        #切片CE loss
+        # 切片CE_loss+矫正
         curr_out = out[:data_batch_size, last_step_out_class_num:]
         curr_labels = labels - last_step_out_class_num
         loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
@@ -293,7 +293,35 @@ class AVCIL(BaseLearner):
         prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
         loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
 
-        loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+        loss_within = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+
+        # task-level CE: 只判断样本属于 old group 还是 current group
+        all_logits = out[: data_batch_size + exemplar_data_batch_size]
+        all_labels = torch.cat([labels, exemplar_labels])
+
+        old_group_logit = torch.logsumexp(all_logits[:, :last_step_out_class_num], dim=1)
+        new_group_logit = torch.logsumexp(all_logits[:, last_step_out_class_num:self._total_classes], dim=1)
+        task_logits = torch.stack([old_group_logit, new_group_logit], dim=1)
+        task_targets = (all_labels >= last_step_out_class_num).long()
+
+        loss_task = F.cross_entropy(task_logits, task_targets)
+
+        beta = 0.2  # 先试 0.1, 0.2, 0.3
+        loss_CE = loss_within + beta * loss_task
+        
+        
+        
+        
+        
+        #切片CE loss
+        # curr_out = out[:data_batch_size, last_step_out_class_num:]
+        # curr_labels = labels - last_step_out_class_num
+        # loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
+
+        # prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
+        # loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
+
+        # loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
 
         #全类别CE loss
         # curr_out = out[:data_batch_size, :]
