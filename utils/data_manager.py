@@ -5,7 +5,7 @@ from PIL import Image
 from torch.nn.functional import instance_norm
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE, MMEA_CL
+from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE, MMEA_CL, Kinetics
 from tqdm import tqdm
 import os
 from scipy import signal
@@ -13,6 +13,7 @@ import pandas as pd
 from scipy.integrate import trapz
 import torch
 from numpy.random import randint
+import h5py
 from collections import OrderedDict
 
 class DataManager(object):
@@ -234,8 +235,8 @@ class AVE_DummyDataset(DummyDataset):
         self.m = 2
 
     def _load_data(self):
-        self.video_features = np.load("data/AVE/video_features.npy", allow_pickle=True, mmap_mode="r")
-        self.audio_features = np.load("data/AVE/audio_features.npy", allow_pickle=True, mmap_mode="r")
+        self.video_features = np.load("data/AVE_features/video_features.npy", allow_pickle=True, mmap_mode="r")
+        self.audio_features = np.load("data/AVE_features/audio_features.npy", allow_pickle=True, mmap_mode="r")
     
     def __getitem__(self, idx):
         base_len = len(self.data_idxs)
@@ -243,17 +244,52 @@ class AVE_DummyDataset(DummyDataset):
             real_idx = self.data_idxs[idx]
             sample = {"m1": self.video_features[real_idx], "m2": self.audio_features[real_idx]}
             sample = {k: torch.tensor(v) for k,v in sample.items()}
-            sample['m2'] = torch.mean(sample['m2'], dim=0)
+            # sample['m2'] = torch.mean(sample['m2'], dim=0)
         else:
             mem_idx = idx - base_len
             sample = self.appendent_data[mem_idx]
-            sample = {k: torch.tensor(v) for k,v in sample.items()}
+            # sample = {k: torch.tensor(v) for k,v in sample.items()}
         
         assert isinstance(sample, dict)
         
         label = torch.tensor(self.labels[idx], dtype=torch.long)
         return sample, label
 
+
+
+class Kinetics_DummyDataset(DummyDataset):
+    def __init__(
+        self,
+        data,
+        labels,
+        trsf,
+        use_path=False,
+        mode='train',
+        appendent_data=None,
+    ):
+        super().__init__(data, labels, trsf, use_path, mode, appendent_data)
+        self.m = 2
+
+    def _load_data(self):
+        self.video_features = h5py.File("data/KS/visual_features.h5", 'r')
+        self.audio_features = np.load("data/KS/audio_pretrained_feature_dict.npy", allow_pickle=True).item()
+    
+    def __getitem__(self, idx):
+        base_len = len(self.data)
+        if idx < base_len:
+            real_id = self.data[idx]
+            sample = {"m1": self.video_features[real_id][()], "m2": self.audio_features[real_id]}
+            sample = {k: torch.from_numpy(v) for k,v in sample.items()}
+            # sample['m2'] = torch.mean(sample['m2'], dim=0)
+        else:
+            mem_idx = idx - base_len
+            sample = self.appendent_data[mem_idx]
+            # sample = {k: torch.tensor(v) for k,v in sample.items()}
+        
+        assert isinstance(sample, dict)
+        
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        return sample, label
 
 
 class MMEA_DummyDataset(DummyDataset):
@@ -497,6 +533,8 @@ def _get_metadata(dataset_name):
         return AVE(), AVE_DummyDataset  
     elif name == "mmea":
         return MMEA_CL(), MMEA_DummyDataset
+    elif name == "kinetics":
+        return Kinetics(), Kinetics_DummyDataset
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
 

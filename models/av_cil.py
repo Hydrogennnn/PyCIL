@@ -22,20 +22,20 @@ from tqdm.contrib import tzip
 
 EPSILON = 1e-8
 
-init_epoch = 200
+init_epoch = 100
 init_lr = 1e-3
-init_milestones = [100]
+init_milestones = [50]
 init_lr_decay = 0.1
 init_weight_decay = 0.0005
 
 
-epochs = 200
+epochs = 100
 lrate = 1e-3
-milestones = [100]
+milestones = [50]
 lrate_decay = 0.1
-batch_size = 256
+batch_size = 64
 weight_decay = 1e-4
-num_workers = 8
+num_workers = 2
 T = 2
 
 instance_contrastive_temperature = 0.05
@@ -79,6 +79,7 @@ class AVCIL(BaseLearner):
             'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
             map_location=self._device,
         )
+        self._old_network.eval()
         self._known_classes = self._total_classes
         logging.info("Exemplar size: {}".format(self.exemplar_size))
         
@@ -126,6 +127,66 @@ class AVCIL(BaseLearner):
             # )
             
     
+    def get_converience(self):
+        model = self._network
+        loader = self.test_loader
+        model.eval()
+        y_true = []
+        logvar_a = []
+        logvar_v = []
+        logvar_fusion = []
+
+        for i, (inputs, targets) in enumerate(loader):
+            inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
+            with torch.no_grad():
+                outputs = model(inputs, out_dist=True)
+
+            logvar_a.append(outputs["logvar_a"].cpu().numpy())
+            logvar_v.append(outputs["logvar_v"].cpu().numpy())
+            logvar_fusion.append(outputs["logvar_fusion"].cpu().numpy())
+
+            y_true.append(targets.cpu().numpy())
+        
+        y_true = np.concatenate(y_true)
+        logvar_a = np.concatenate(logvar_a)
+        logvar_v = np.concatenate(logvar_v)
+        logvar_fusion = np.concatenate(logvar_fusion)
+
+        assert len(logvar_a) == len(y_true), "Data length error."
+
+
+        logvar_a_list = []
+        logvar_v_list = []
+        logvar_fusion_list = []
+
+        increment = self._increment
+        for class_id in range(0, np.max(y_true), increment):
+            idxes = np.where(
+                np.logical_and(y_true >= class_id, y_true < class_id + increment)
+            )[0]
+            
+            logvar_a_cls = logvar_a[idxes]
+            logvar_v_cls = logvar_v[idxes]
+            logvar_fusion_cls = logvar_fusion[idxes]
+            
+            logvar_a_list.append(logvar_a_cls.sum(axis=1).mean())
+            logvar_v_list.append(logvar_v_cls.sum(axis=1).mean())
+            logvar_fusion_list.append(logvar_fusion_cls.sum(axis=1).mean())
+        
+        return logvar_a_list, logvar_v_list, logvar_fusion_list
+
+            # label = "{}-{}".format(
+            #     str(class_id).rjust(2, "0"), str(class_id + increment - 1).rjust(2, "0")
+            # )
+            # print("=========", "Class Intervals:",label,"=========")
+            # preds_in_task = y_pred[idxes].flatten()
+            # unique, counts = np.unique(preds_in_task, return_counts=True)
+            # for cls, cnt in sorted(zip(unique, counts)):
+            #     print(f"  class {cls:>3d}: {cnt} 个样本")
+        
+        
+
+
     def _compute_accuracy(self, model, loader, old_model=None):
         model.eval()
 
@@ -182,7 +243,11 @@ class AVCIL(BaseLearner):
         # instance_contra_loss = self.cal_contrastive_loss(audio_feature, visual_feature, temperature=instance_contrastive_temperature)
                 
         # if args.class_contrastive:
-        modal_similarity_loss = KL_regular(outputs["mu_v"], outputs["logvar_v"], outputs["mu_a"], outputs["logvar_a"])
+        # modal_similarity_loss = KL_regular(outputs["mu_v"], outputs["logvar_v"], outputs["mu_a"], outputs["logvar_a"])
+        modal_similarity_loss = 0.5 * (
+            KL_regular(outputs["mu_v"], outputs["logvar_v"], outputs["mu_a"], outputs["logvar_a"])
+            + KL_regular(outputs["mu_a"], outputs["logvar_a"], outputs["mu_v"], outputs["logvar_v"])
+        )
         # all_labels = torch.cat((labels, exemplar_labels))
         # class_contra_loss = self.class_contrastive_loss(audio_feature, visual_feature, all_labels, temperature=class_contrastive_temperature)
         
@@ -220,6 +285,7 @@ class AVCIL(BaseLearner):
         class_num_per_step = self._increment
         old_out = old_out[:,:last_step_out_class_num]
         
+        #切片CE loss
         curr_out = out[:data_batch_size, last_step_out_class_num:]
         curr_labels = labels - last_step_out_class_num
         loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
@@ -229,6 +295,17 @@ class AVCIL(BaseLearner):
 
         loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
 
+        #全类别CE loss
+        # curr_out = out[:data_batch_size, :]
+        # loss_curr = self.CE_loss(self._total_classes, curr_out, labels)
+
+        # pre_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :]
+        # loss_prev = self.CE_loss(self._total_classes, pre_out, exemplar_labels)
+
+        # loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+        
+        
+        
         # if self._dataset == 'AVE' and args.class_num_per_step == 4 and step == 1:
         #     loss_CE = CE_loss(args.class_num_per_step + last_step_out_class_num, out, torch.cat((labels, exemplar_labels)))
 
@@ -247,13 +324,13 @@ class AVCIL(BaseLearner):
         details['KD_loss'] = loss_KD.item()
 
         # if args.instance_contrastive:
-        loss += 0.5 * con_loss
+        loss += 1e-3 * con_loss
         details['con_loss'] = con_loss.item()
         # if args.class_contrastive:
-        loss += 1.0* modal_similarity_loss
+        loss += 1e-5* modal_similarity_loss
         details['modal_similarity_loss'] = modal_similarity_loss.item()
         # kl loss
-        loss += 0.1 * tot_kl_loss
+        loss += 1e-3 * tot_kl_loss
         details['tot_kl_loss'] = tot_kl_loss.item()
 
         # if args.attn_score_distil:
@@ -340,10 +417,10 @@ class AVCIL(BaseLearner):
         self._train(self.train_loader, self.val_loader)
         self._network = ddp.unwrap_model(self._network)
         ddp.barrier()
-        # self._network = torch.load(
-        #     'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
-        #     map_location=self._device,
-        # )
+        self._network = torch.load(
+            'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+            map_location=self._device,
+        )
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
 
         # if self._cur_task > 0:
@@ -513,7 +590,7 @@ class AVCIL(BaseLearner):
             self._network.train()
             loss_details = defaultdict(float)
             correct, total = 0, 0
-            iterator = tzip(train_loader, cycle(self.mem_loader))
+            iterator = zip(train_loader, cycle(self.mem_loader))
             for samples in iterator:
                 curr, prev = samples
                 data, labels = curr
@@ -582,6 +659,6 @@ def adjust_learning_rate(optimizer, epoch):
 def KL_regular(mu_1,logvar_1,mu_2,logvar_2):
     var_1=torch.exp(logvar_1)
     var_2=torch.exp(logvar_2)
-    KL_loss=logvar_2-logvar_1+((var_1.pow(2)+(mu_1-mu_2).pow(2))/(2*var_2.pow(2)))-0.5
+    KL_loss=logvar_2-logvar_1+((var_1+(mu_1-mu_2).pow(2))/(2*var_2))-0.5
     KL_loss=KL_loss.sum(dim=1).mean()
     return KL_loss

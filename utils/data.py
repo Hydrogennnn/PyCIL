@@ -158,17 +158,18 @@ class iImageNet100(iData):
 
 class AVE(iData):
     class_order = [18, 16, 10, 21, 27, 6, 5, 11, 14, 9, 24, 12, 19, 15, 25, 1, 13, 2, 17, 26, 4, 22, 7, 8, 23, 0, 3, 20]
-
+    # class_order = [17, 9, 13, 22, 27, 2, 5, 11, 18, 14, 25, 16, 4, 6, 0, 3, 21, 26, 15, 19, 8, 10, 23, 7, 1, 24, 12, 20]
+    
     train_trsf = [transforms.ToTensor()]
     test_trsf = [transforms.ToTensor()]
 
     def download_data(self):
-        split = np.load("data/AVE/split.npy", allow_pickle=True).item()
+        split = np.load("data/AVE_features/split.npy", allow_pickle=True).item()
         self.train_data_idx = split["train"]
         self.test_data_idx = split["test"]
         self.val_data_idx = split["val"]
 
-        self.all_targets = np.load("data/AVE/labels.npy", allow_pickle=True)
+        self.all_targets = np.load("data/AVE_features/labels.npy", allow_pickle=True)
         self.train_targets = self.all_targets[self.train_data_idx]
         self.test_targets = self.all_targets[self.test_data_idx]
         self.val_targets = self.all_targets[self.val_data_idx]
@@ -177,6 +178,27 @@ class AVE(iData):
         self.test_data = self.test_data_idx
         self.val_data = self.val_data_idx
 
+
+
+class Kinetics(iData):
+    class_order = [23, 16, 1, 5, 6, 7, 11, 26, 21, 28, 0, 24, 3, 10, 8, 14, 15, 19, 17, 25, 9, 12, 2, 22, 20, 27, 18, 29, 13, 4]
+
+    train_trsf = [transforms.ToTensor()]
+    test_trsf = [transforms.ToTensor()]
+
+    def download_data(self):
+        self.split = np.load("data/KS/split.npy", allow_pickle=True).item()
+        self.all_targets = np.load("data/KS/labels.npy", allow_pickle=True).item()
+
+        self.train_data = self.split["train"]
+        self.test_data = self.split["test"]
+        self.val_data = self.split["val"]
+
+        self.train_targets = self.all_targets["train"]
+        self.test_targets = self.all_targets["test"]
+        self.val_targets = self.all_targets["val"]
+        
+        
 
 
 class MMEA_CL(iData):

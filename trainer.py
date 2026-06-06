@@ -74,6 +74,9 @@ def _train(args):
 
     cnn_curve, nme_curve = {"top1": [], "top5": []}, {"top1": [], "top5": []}
     cnn_matrix, nme_matrix = [], []
+    video_var_matrix = []
+    audio_var_matrix = []
+    fusion_var_matrix = []
 
     for task in range(data_manager.nb_tasks):
         logging.info("All params: {}".format(count_parameters(model._network)))
@@ -82,10 +85,15 @@ def _train(args):
         )
         model.incremental_train(data_manager)
         cnn_accy, nme_accy = model.eval_task()
+        logvar_a_list, logvar_v_list, logvar_fusion_list = model.get_converience()
         model.after_task()
 
         if not ddp.is_main_process():
             continue
+
+        video_var_matrix.append(logvar_v_list)
+        audio_var_matrix.append(logvar_a_list) 
+        fusion_var_matrix.append(logvar_fusion_list)
 
         if nme_accy is not None:
             logging.info("CNN: {}".format(cnn_accy["grouped"]))
@@ -159,6 +167,33 @@ def _train(args):
         print(np_acctable)
         print('Forgetting (NME):', forgetting)
         logging.info('Forgetting (NME): {}'.format(forgetting))
+
+    if len(video_var_matrix)>0:
+        np_video_logvar = np.zeros([task + 1, task+1])
+        np_audio_logvar = np.zeros([task + 1, task+1])
+        np_fusion_logvar = np.zeros([task + 1, task+1])
+        
+        for idxx, line in enumerate(video_var_matrix):
+            idxy = len(line)
+            np_video_logvar[idxx, :idxy] = np.array(line)
+        np_video_logvar = np_video_logvar.T
+
+        for idxx, line in enumerate(audio_var_matrix):
+            idxy = len(line)
+            np_audio_logvar[idxx, :idxy] = np.array(line)
+        np_audio_logvar = np_audio_logvar.T
+
+        for idxx, line in enumerate(fusion_var_matrix):
+            idxy = len(line)
+            np_fusion_logvar[idxx, :idxy] = np.array(line)
+        np_fusion_logvar = np_fusion_logvar.T
+
+        print('Video Log-Variance Matrix:')
+        print(np_video_logvar)
+        print('Audio Log-Variance Matrix:')
+        print(np_audio_logvar)
+        print('Fusion Log-Variance Matrix:')
+        print(np_fusion_logvar)
 
 
 def _set_device(args):

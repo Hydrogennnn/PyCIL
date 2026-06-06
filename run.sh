@@ -7,7 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)   # 提取该脚本所在目录的绝�
 cd "$SCRIPT_DIR"                            # 进入该目录
 
 # --- 日志设置：将终端输出同步到本地文件run.log中 ---
-log_file="logs/avcil_with_dist.log"
+log_file="logs/avcil_dist_ave.log"
 : > $log_file
 exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
 
@@ -26,5 +26,5 @@ exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
 
 wandb login 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
 
-torchrun --nproc_per_node=2 main.py --config ./exps/av_cil.json
-# python main.py --config exps/av_cil.json
+# torchrun --nproc_per_node=2 main.py --config ./exps/av_cil.json
+python main.py --config exps/av_cil.json
