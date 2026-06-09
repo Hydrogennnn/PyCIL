@@ -1626,10 +1626,12 @@ class AV_CIL_Net(BaseNet):
         return spatial_attn_score, temporal_attn_score
 
     def _reparameterize(self, mu, logvar):
-        std = torch.exp(logvar).sqrt()
-        epsilon = torch.randn_like(std)
-        sampler = epsilon * std
-        return mu + sampler
-
+        if self.training:
+            std = torch.exp(logvar).sqrt()
+            epsilon = torch.randn_like(std)
+            sampler = epsilon * std
+            return mu + sampler
+        else:
+            return mu
 
 
