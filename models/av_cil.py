@@ -533,10 +533,10 @@ class AVCIL(BaseLearner):
                 lr=init_lr,
                 weight_decay=init_weight_decay,
             )
-            # scheduler = optim.lr_scheduler.MultiStepLR(
-            #     optimizer=optimizer, milestones=init_milestones, gamma=init_lr_decay
-            # )
-            self._init_train(train_loader, val_loader, optimizer)
+            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer=optimizer, T_0=10, T_mult=2)
+            
+            self._init_train(train_loader, val_loader, optimizer, scheduler)
+
         else:
             optimizer = optim.Adam(
                 self._network.parameters(),
@@ -546,9 +546,10 @@ class AVCIL(BaseLearner):
             # scheduler = optim.lr_scheduler.MultiStepLR(
             #     optimizer=optimizer, milestones=milestones, gamma=lrate_decay
             # )
-            self._update_representation(train_loader, val_loader, optimizer)
+            scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer=optimizer, T_0=10, T_mult=2)
+            self._update_representation(train_loader, val_loader, optimizer, scheduler)
 
-    def _init_train(self, train_loader, val_loader, optimizer):
+    def _init_train(self, train_loader, val_loader, optimizer, scheduler):
         prog_bar = tqdm(range(init_epoch), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
@@ -570,7 +571,8 @@ class AVCIL(BaseLearner):
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
 
-            adjust_learning_rate(optimizer, epoch)
+            # adjust_learning_rate(optimizer, epoch)
+            scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
             if epoch % 5 == 0:
@@ -606,7 +608,7 @@ class AVCIL(BaseLearner):
 
         logging.info(info)
 
-    def _update_representation(self, train_loader, val_loader, optimizer):
+    def _update_representation(self, train_loader, val_loader, optimizer, scheduler):
         # prog_bar = tqdm(range(epochs))
         prog_bar = tqdm(range(epochs), disable=not ddp.is_main_process())
         best_acc = -1e9
@@ -634,7 +636,8 @@ class AVCIL(BaseLearner):
                     loss_details[k] += v
                 # loss_details['tot_loss'] += loss.item()
             
-            adjust_learning_rate(optimizer, epoch)
+            # adjust_learning_rate(optimizer, epoch)
+            scheduler.step()
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             val_acc = self._compute_accuracy(self._network, val_loader)
             
