@@ -22,25 +22,6 @@ from tqdm.contrib import tzip
 
 EPSILON = 1e-8
 
-init_epoch = 200
-init_lr = 1e-3
-init_milestones = [60, 120, 170]
-init_lr_decay = 0.1
-init_weight_decay = 0.0005
-
-
-epochs = 200
-lrate = 1e-3
-milestones = [100]
-lrate_decay = 0.1
-batch_size = 256
-weight_decay = 1e-4
-num_workers = 8
-T = 2
-
-instance_contrastive_temperature = 0.05
-class_contrastive_temperature = 0.05
-
 
 class AVCIL_My(BaseLearner):
     def __init__(self, args):
@@ -151,11 +132,20 @@ class AVCIL_My(BaseLearner):
             old_temporal_attn_score = old_temporal_attn_score.detach()
 
         # if args.instance_contrastive:
-        instance_contra_loss = self.cal_contrastive_loss(audio_feature, visual_feature, temperature=instance_contrastive_temperature)
+        instance_contra_loss = self.cal_contrastive_loss(
+            audio_feature,
+            visual_feature,
+            temperature=self.args["instance_contrastive_temperature"],
+        )
                 
         # if args.class_contrastive:
         all_labels = torch.cat((labels, exemplar_labels))
-        class_contra_loss = self.class_contrastive_loss(audio_feature, visual_feature, all_labels, temperature=class_contrastive_temperature)
+        class_contra_loss = self.class_contrastive_loss(
+            audio_feature,
+            visual_feature,
+            all_labels,
+            temperature=self.args["class_contrastive_temperature"],
+        )
         
         # if args.attn_score_distil:
         exem_spatial_attn_score = spatial_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(2, 3)
@@ -196,9 +186,9 @@ class AVCIL_My(BaseLearner):
             start = t * class_num_per_step
             end = (t + 1) * class_num_per_step
 
-            soft_target = F.softmax(old_out[:, start:end] / T, dim=1)
-            output_log = F.log_softmax(out[:, start:end] / T, dim=1)
-            loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (T**2)
+            soft_target = F.softmax(old_out[:, start:end] / self.args["T"], dim=1)
+            output_log = F.log_softmax(out[:, start:end] / self.args["T"], dim=1)
+            loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (self.args["T"]**2)
         loss_KD = loss_KD.sum()
         loss = loss_CE + loss_KD
         # if args.instance_contrastive:
@@ -229,10 +219,10 @@ class AVCIL_My(BaseLearner):
         train_sampler = ddp.make_sampler(train_dataset, shuffle=True)
         self.train_loader = DataLoader(
             train_dataset,
-            batch_size=batch_size,
+            batch_size=self.args["batch_size"],
             shuffle=train_sampler is None,
             sampler=train_sampler,
-            num_workers=num_workers,
+            num_workers=self.args["num_workers"],
         )
         if self._cur_task > 0:
             mem_set = data_manager.get_dataset(
@@ -244,16 +234,16 @@ class AVCIL_My(BaseLearner):
             mem_sampler = ddp.make_sampler(mem_set, shuffle=True)
             self.mem_loader = DataLoader(
                 mem_set,
-                batch_size=batch_size,
+                batch_size=self.args["batch_size"],
                 shuffle=mem_sampler is None,
                 sampler=mem_sampler,
-                num_workers=num_workers,
+                num_workers=self.args["num_workers"],
             )
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
         )
         self.test_loader = DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+            test_dataset, batch_size=self.args["batch_size"], shuffle=False, num_workers=self.args["num_workers"]
         )
         
         val_dataset = data_manager.get_dataset(
@@ -261,7 +251,7 @@ class AVCIL_My(BaseLearner):
         )
         
         self.val_loader = DataLoader(
-            val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers
+            val_dataset, batch_size=self.args["batch_size"], shuffle=False, num_workers=self.args["num_workers"]
         )
         
         if self._cur_task > 0:
@@ -275,10 +265,10 @@ class AVCIL_My(BaseLearner):
             mem_sampler = ddp.make_sampler(mem_dataset, shuffle=False)
             self.mem_loader = DataLoader(
                 mem_dataset,
-                batch_size=batch_size,
+                batch_size=self.args["batch_size"],
                 shuffle=False,
                 sampler=mem_sampler,
-                num_workers=num_workers,
+                num_workers=self.args["num_workers"],
             )
 
         self._network = ddp.wrap_model(self._network, self._device, self.args)
@@ -343,26 +333,26 @@ class AVCIL_My(BaseLearner):
         if self._cur_task == 0:
             optimizer = optim.Adam(
                 self._network.parameters(),
-                lr=init_lr,
-                weight_decay=init_weight_decay,
+                lr=self.args["init_lr"],
+                weight_decay=self.args["init_weight_decay"],
             )
             scheduler = optim.lr_scheduler.MultiStepLR(
-                optimizer=optimizer, milestones=init_milestones, gamma=init_lr_decay
+                optimizer=optimizer, milestones=self.args["init_milestones"], gamma=self.args["init_lr_decay"]
             )
             self._init_train(train_loader, val_loader, optimizer, scheduler)
         else:
             optimizer = optim.Adam(
                 self._network.parameters(),
-                lr=lrate,
-                weight_decay=weight_decay,
+                lr=self.args["lrate"],
+                weight_decay=self.args["weight_decay"],
             )  # 1e-5
             scheduler = optim.lr_scheduler.MultiStepLR(
-                optimizer=optimizer, milestones=milestones, gamma=lrate_decay
+                optimizer=optimizer, milestones=self.args["milestones"], gamma=self.args["lrate_decay"]
             )
             self._update_representation(train_loader, val_loader, optimizer, scheduler)
 
     def _init_train(self, train_loader, val_loader, optimizer, scheduler):
-        prog_bar = tqdm(range(init_epoch), disable=not ddp.is_main_process())
+        prog_bar = tqdm(range(self.args["init_epoch"]), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
             if hasattr(train_loader.sampler, "set_epoch"):
@@ -392,7 +382,7 @@ class AVCIL_My(BaseLearner):
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
                     self._cur_task,
                     epoch + 1,
-                    init_epoch,
+                    self.args["init_epoch"],
                     losses / len(train_loader),
                     train_acc,
                     val_acc,
@@ -411,7 +401,7 @@ class AVCIL_My(BaseLearner):
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}".format(
                     self._cur_task,
                     epoch + 1,
-                    init_epoch,
+                    self.args["init_epoch"],
                     losses / len(train_loader),
                     train_acc,
                 )
@@ -422,7 +412,7 @@ class AVCIL_My(BaseLearner):
 
     def _update_representation(self, train_loader, val_loader, optimizer, scheduler):
         # prog_bar = tqdm(range(epochs))
-        prog_bar = tqdm(range(epochs), disable=not ddp.is_main_process())
+        prog_bar = tqdm(range(self.args["epochs"]), disable=not ddp.is_main_process())
         best_acc = -1e9
         for _, epoch in enumerate(prog_bar):
             if hasattr(train_loader.sampler, "set_epoch"):
@@ -446,7 +436,7 @@ class AVCIL_My(BaseLearner):
                 optimizer.step()
                 loss_details['tot_loss'] += loss.item()
             
-            adjust_learning_rate(optimizer, epoch)
+            adjust_learning_rate(optimizer, epoch, self.args["milestones"])
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
             val_acc = self._compute_accuracy(self._network, val_loader)
             
@@ -484,7 +474,7 @@ def _KD_loss(pred, soft, T):
     return -1 * torch.mul(soft, pred).sum() / pred.shape[0]
 
 
-def adjust_learning_rate(optimizer, epoch):
+def adjust_learning_rate(optimizer, epoch, milestones):
     miles_list = np.array(milestones) - 1
     if epoch in miles_list:
         current_lr = optimizer.param_groups[0]['lr']
