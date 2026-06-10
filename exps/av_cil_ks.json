@@ -1,15 +1,16 @@
 {
     "prefix": "reproduce",
-    "dataset": "ave",
+    "dataset": "kinetics",
     "memory_size": 340,
     "memory_per_class": 20,
-    "fixed_memory": false,
-    "shuffle": true,
-    "init_cls": 7,
-    "increment": 7,
+    "fixed_memory": true,
+    "shuffle": false,
+    "init_cls": 6,
+    "increment": 6,
     "model_name": "avcil",
     "convnet_type": "resnet32",
     "device" : ["0"],
-    "seed": [42],
+    "seed": [1993],
     "project": "nips26"
 }
+

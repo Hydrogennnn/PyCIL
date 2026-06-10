@@ -6,6 +6,9 @@ def get_model(model_name, args):
     if name == 'avcil':
         from models.av_cil import AVCIL
         return AVCIL(args)
+    if name == 'my':
+        from models.mymodel import AVCIL_My
+        return AVCIL_My(args)
     else:
         assert 0
     # if name == "icarl":

@@ -1452,7 +1452,7 @@ class MoENet(BaseNet):
 #         self.eval()
 
 #         return self
-    
+
 class AV_CIL_Net(BaseNet):
     def __init__(self, args, pretrained, gradcam=False):
         super().__init__(args)
@@ -1503,8 +1503,123 @@ class AV_CIL_Net(BaseNet):
 
     def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False):
 
-        visual = inputs["video"]
-        audio = inputs["audio"]
+        visual = inputs["m1"]
+        audio = inputs["m2"]
+
+        visual = visual.view(visual.shape[0], 8, -1, 768)
+        spatial_attn_score, temporal_attn_score = self.audio_visual_attention(audio, visual)
+        visual_pooled_feature = torch.sum(spatial_attn_score * visual, dim=2)
+        visual_pooled_feature = torch.sum(temporal_attn_score * visual_pooled_feature, dim=1)
+        
+        audio_feature = F.relu(self.audio_proj(audio))
+        visual_feature = F.relu(self.visual_proj(visual_pooled_feature))
+        audio_visual_features = visual_feature + audio_feature
+        
+        logits = self.fc(audio_visual_features)["logits"]
+        outputs = {}
+        # if AFC_train_out:
+        #     audio_feature.retain_grad()
+        #     visual_feature.retain_grad()
+        #     visual_pooled_feature.retain_grad()
+        #     outputs += (logits, visual_pooled_feature, audio_feature, visual_feature)
+        #     return outputs
+        # else:
+        if out_logits:
+            outputs["logits"] = logits
+        if out_features:
+            if out_features_norm:
+                # outputs += (F.normalize(audio_visual_features),)
+                outputs["audio_visual_features"] = F.normalize(audio_visual_features)
+            else:
+                # outputs += (audio_visual_features,)
+                outputs["audio_visual_features"] = audio_visual_features
+        if out_feature_before_fusion:
+            # outputs += (F.normalize(audio_feature), F.normalize(visual_feature))
+            outputs["visual_feature"] = F.normalize(visual_feature)
+            outputs["audio_feature"] = F.normalize(audio_feature)
+        if out_attn_score:
+            outputs["spatial_attn_score"] = spatial_attn_score
+            outputs["temporal_attn_score"] = temporal_attn_score
+        return outputs
+
+
+
+
+    def audio_visual_attention(self, audio_features, visual_features):
+
+        proj_audio_features = torch.tanh(self.attn_audio_proj(audio_features))
+        proj_visual_features = torch.tanh(self.attn_visual_proj(visual_features))
+
+        # (BS, 8, 14*14, 768)
+        spatial_score = torch.einsum("ijkd,id->ijkd", [proj_visual_features, proj_audio_features])
+        # (BS, 8, 14*14, 768)
+        spatial_attn_score = F.softmax(spatial_score, dim=2)
+        # (BS, 8, 768)
+        spatial_attned_proj_visual_features = torch.sum(spatial_attn_score * proj_visual_features, dim=2)
+
+        # (BS, 8, 768)
+        temporal_score = torch.einsum("ijd,id->ijd", [spatial_attned_proj_visual_features, proj_audio_features])
+        temporal_attn_score = F.softmax(temporal_score, dim=1)
+
+        return spatial_attn_score, temporal_attn_score
+
+
+
+
+
+
+class My_Net(BaseNet):
+    def __init__(self, args, pretrained, gradcam=False):
+        super().__init__(args)
+
+
+        self.audio_proj = nn.Linear(768, 768)
+        self.visual_proj = nn.Linear(768, 768)
+        self.attn_audio_proj = nn.Linear(768, 768)
+        self.attn_visual_proj = nn.Linear(768, 768)
+        
+    @property
+    def feature_dim(self):
+        return 768
+    
+    def extract_vector(self, x):
+        outputs = self(x, out_features=True, out_features_norm=True)        
+        return outputs["audio_visual_features"]
+        
+    def update_fc(self, nb_classes):
+        # nb_classes : 总的class数量
+        fc = self.generate_fc(self.feature_dim, nb_classes)
+        # 复制前面任务的线性层
+        if self.fc is not None:
+            nb_output = self.fc.out_features
+            weight = copy.deepcopy(self.fc.weight.data)
+            bias = copy.deepcopy(self.fc.bias.data)
+            fc.weight.data[:nb_output] = weight
+            fc.bias.data[:nb_output] = bias
+
+        del self.fc
+        self.fc = fc
+
+    def weight_align(self, increment):
+        weights = self.fc.weight.data
+        newnorm = torch.norm(weights[-increment:, :], p=2, dim=1)
+        oldnorm = torch.norm(weights[:-increment, :], p=2, dim=1)
+        meannew = torch.mean(newnorm)
+        meanold = torch.mean(oldnorm)
+        gamma = meanold / meannew
+        print("alignweights,gamma=", gamma)
+        self.fc.weight.data[-increment:, :] *= gamma
+
+    def generate_fc(self, in_dim, out_dim):
+        fc = SimpleLinear(in_dim, out_dim)
+
+        return fc
+    
+
+    def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False):
+
+        visual = inputs["m1"]
+        audio = inputs["m2"]
 
         visual = visual.view(visual.shape[0], 8, -1, 768)
         spatial_attn_score, temporal_attn_score = self.audio_visual_attention(audio, visual)
