@@ -35,7 +35,7 @@ def setup_parser():
     parser.add_argument('--shuffle', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--init_cls', type=int, default=7)
     parser.add_argument('--increment', type=int, default=7)
-    parser.add_argument('--model_name', type=str, default='avcil', choices=['avcil', 'my', 'moe'])
+    parser.add_argument('--model_name', type=str, default='ours')
     parser.add_argument('--convnet_type', type=str, default='resnet32')
     parser.add_argument('--device', nargs='+', default=['0'])
     parser.add_argument('--seed', nargs='+', type=int, default=[42])
@@ -65,10 +65,10 @@ def setup_parser():
     parser.add_argument('--class_contrastive_temperature', type=float, default=0.05)
 
     # Defaults for network variants that may be selected through convnet_type.
-    parser.add_argument('--proj_hidden_dim', type=int, default=768)
-    parser.add_argument('--proj_output_dim', type=int, default=768)
-    parser.add_argument('--init_interpolation_factor', type=float, default=0.5)
-    parser.add_argument('--attn_num_heads', type=int, default=8)
+    # parser.add_argument('--proj_hidden_dim', type=int, default=768)
+    # parser.add_argument('--proj_output_dim', type=int, default=768)
+    # parser.add_argument('--init_interpolation_factor', type=float, default=0.5)
+    # parser.add_argument('--attn_num_heads', type=int, default=8)
 
     return parser
 

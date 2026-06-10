@@ -105,18 +105,18 @@ class AVCIL(BaseLearner):
         data_batch_size = labels.shape[0]
         exemplar_data_batch_size = exemplar_labels.shape[0]
 
-        visual = data["video"]
-        audio = data["audio"]
-        exemplar_visual = exemplar_data["video"]
-        exemplar_audio = exemplar_data["audio"]
+        visual = data["m1"]
+        audio = data["m2"]
+        exemplar_visual = exemplar_data["m1"]
+        exemplar_audio = exemplar_data["m2"]
 
         total_visual = torch.cat((visual, exemplar_visual))
         total_audio = torch.cat((audio, exemplar_audio))
         total_visual = total_visual.to(self._device)
         total_audio = total_audio.to(self._device)
 
-        inputs = {"video": total_visual,
-                  "audio": total_audio}
+        inputs = {"m1": total_visual,
+                  "m2": total_audio}
         outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
         out = outputs["logits"]
         audio_feature = outputs["audio_feature"]
