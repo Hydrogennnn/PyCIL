@@ -66,6 +66,8 @@ class BaseNet(nn.Module):
 
         # self.convnet = get_convnet(args, pretrained)
         self.fc = None
+        self.v_fc = None
+        self.a_fc = None
 
     @property
     def feature_dim(self):
@@ -1588,7 +1590,7 @@ class My_Net(BaseNet):
         
     def update_fc(self, nb_classes):
         # nb_classes : 总的class数量
-        fc = self.generate_fc(self.feature_dim, nb_classes)
+        fc, v_fc, a_fc = self.generate_fc(self.feature_dim, nb_classes)
         # 复制前面任务的线性层
         if self.fc is not None:
             nb_output = self.fc.out_features
@@ -1599,6 +1601,26 @@ class My_Net(BaseNet):
 
         del self.fc
         self.fc = fc
+
+        if self.v_fc is not None:
+            nb_output = self.v_fc.out_features
+            weight = copy.deepcopy(self.v_fc.weight.data)
+            bias = copy.deepcopy(self.v_fc.bias.data)
+            v_fc.weight.data[:nb_output] = weight
+            v_fc.bias.data[:nb_output] = bias
+
+        del self.v_fc
+        self.v_fc = v_fc
+
+        if self.a_fc is not None:
+            nb_output = self.a_fc.out_features
+            weight = copy.deepcopy(self.a_fc.weight.data)
+            bias = copy.deepcopy(self.a_fc.bias.data)
+            a_fc.weight.data[:nb_output] = weight
+            a_fc.bias.data[:nb_output] = bias
+
+        del self.a_fc
+        self.a_fc = a_fc
 
     def weight_align(self, increment):
         weights = self.fc.weight.data
@@ -1612,8 +1634,9 @@ class My_Net(BaseNet):
 
     def generate_fc(self, in_dim, out_dim):
         fc = SimpleLinear(in_dim, out_dim)
-
-        return fc
+        v_fc = SimpleLinear(in_dim, out_dim)
+        a_fc = SimpleLinear(in_dim, out_dim)
+        return fc, v_fc, a_fc
     
 
     def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False):
@@ -1622,6 +1645,9 @@ class My_Net(BaseNet):
         audio = inputs["m2"]
 
         visual = visual.view(visual.shape[0], 8, -1, 768)
+        visual_only_feature = visual.mean(dim=(1, 2))
+        visual_only_feature = F.relu(self.visual_proj(visual_only_feature))
+
         spatial_attn_score, temporal_attn_score = self.audio_visual_attention(audio, visual)
         visual_pooled_feature = torch.sum(spatial_attn_score * visual, dim=2)
         visual_pooled_feature = torch.sum(temporal_attn_score * visual_pooled_feature, dim=1)
@@ -1630,6 +1656,9 @@ class My_Net(BaseNet):
         visual_feature = F.relu(self.visual_proj(visual_pooled_feature))
         audio_visual_features = visual_feature + audio_feature
         
+        v_logits = self.v_fc(visual_only_feature)["logits"]
+        a_logits = self.a_fc(audio_feature)["logits"]
+
         logits = self.fc(audio_visual_features)["logits"]
         outputs = {}
         # if AFC_train_out:
@@ -1641,6 +1670,8 @@ class My_Net(BaseNet):
         # else:
         if out_logits:
             outputs["logits"] = logits
+            outputs["v_logits"] = v_logits
+            outputs["a_logits"] = a_logits
         if out_features:
             if out_features_norm:
                 # outputs += (F.normalize(audio_visual_features),)

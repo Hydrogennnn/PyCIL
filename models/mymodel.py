@@ -119,6 +119,9 @@ class AVCIL_My(BaseLearner):
                   "m2": total_audio}
         outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
         out = outputs["logits"]
+        v_out = outputs["v_logits"]
+        a_out = outputs["a_logits"]
+
         audio_feature = outputs["audio_feature"]
         visual_feature = outputs["visual_feature"]
         spatial_attn_score = outputs["spatial_attn_score"]
@@ -168,17 +171,15 @@ class AVCIL_My(BaseLearner):
         class_num_per_step = self._increment
         old_out = old_out[:,:last_step_out_class_num]
         
-        curr_out = out[:data_batch_size, last_step_out_class_num:]
-        curr_labels = labels - last_step_out_class_num
-        loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
+        # curr_out = out[:data_batch_size, last_step_out_class_num:]
+        # curr_labels = labels - last_step_out_class_num
+        # loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
 
-        prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
-        loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
+        # prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
+        # loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
 
-        loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
-
-        # if self._dataset == 'AVE' and args.class_num_per_step == 4 and step == 1:
-        #     loss_CE = CE_loss(args.class_num_per_step + last_step_out_class_num, out, torch.cat((labels, exemplar_labels)))
+        # loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+        loss_CE = self.Slice_CE(out, labels, exemplar_labels) + 0.01*(self.Slice_CE(v_out, labels, exemplar_labels)+self.Slice_CE(a_out, labels, exemplar_labels))
 
         loss_KD = torch.zeros(self._cur_task).to(self._device)
         
@@ -306,6 +307,39 @@ class AVCIL_My(BaseLearner):
 
         return loss
     
+    def Slice_CE(self, out, labels, exemplar_labels):
+        data_batch_size = labels.shape[0]
+        exemplar_data_batch_size = exemplar_labels.shape[0]
+        last_step_out_class_num = self._known_classes
+        class_num_per_step = self._increment
+        
+        curr_out = out[:data_batch_size, last_step_out_class_num:]
+        curr_labels = labels - last_step_out_class_num
+        loss_curr = self.CE_loss(class_num_per_step, curr_out, curr_labels)
+
+        prev_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :last_step_out_class_num]
+        loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
+
+        loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+
+        return loss_CE
+    
+    def All_CE(self, out, labels, exemplar_labels):
+        data_batch_size = labels.shape[0]
+        exemplar_data_batch_size = exemplar_labels.shape[0]
+
+        curr_out = out[:data_batch_size, :]
+        loss_curr = self.CE_loss(self._total_classes, curr_out, labels)
+
+        pre_out = out[data_batch_size:data_batch_size+exemplar_data_batch_size, :]
+        loss_prev = self.CE_loss(self._total_classes, pre_out, exemplar_labels)
+
+        loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
+        
+        return loss_CE
+
+    
+
     def class_contrastive_loss(self, feature_1, feature_2, label, temperature=0.1):
         class_matrix = label.unsqueeze(0)
         class_matrix = class_matrix.repeat(class_matrix.shape[1], 1)
@@ -421,10 +455,17 @@ class AVCIL_My(BaseLearner):
                 self.mem_loader.sampler.set_epoch(epoch)
             self._network.train()
             loss_details = defaultdict(float)
-            correct, total = 0, 0
-            iterator = tzip(train_loader, cycle(self.mem_loader))
-            for samples in iterator:
-                curr, prev = samples
+            
+            mem_iter = iter(self.mem_loader)
+
+            for curr in train_loader:
+                # curr, prev = samples
+                try:
+                    prev = next(mem_iter)
+                except StopIteration:
+                    mem_iter = iter(self.mem_loader)
+                    prev = next(mem_iter)
+
                 data, labels = curr
                 labels = labels.to(self._device)
                 exemplar_data, exemplar_labels = prev

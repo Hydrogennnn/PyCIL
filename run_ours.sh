@@ -9,7 +9,7 @@ python main.py \
   --shuffle \
   --init_cls 7 \
   --increment 7 \
-  --model_name avcil \
+  --model_name ours \
   --device 0 \
   --seed 42 \
   --project nips26 \
