@@ -247,7 +247,7 @@ class AVE_DummyDataset(DummyDataset):
             mem_idx = idx - base_len
             real_id = self.appendent_data[mem_idx]
         sample = {"m1": self.video_features[real_id][()], "m2": self.audio_features[real_id]}
-        sample = {k: torch.from_numpy(v) for k,v in sample.items()}
+        sample = {k: torch.from_numpy(v.copy()) for k,v in sample.items()}
         
         assert isinstance(sample, dict)
         

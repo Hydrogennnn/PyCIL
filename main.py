@@ -42,6 +42,7 @@ def setup_parser():
     parser.add_argument('--project', type=str, default='nips26')
     parser.add_argument('--aug', type=int, default=1)
     parser.add_argument('--csv_name', type=str, default='default')
+    parser.add_argument('--save_name', type=str, default='')
 
     # Distributed training settings.
     parser.add_argument('--distributed', action=argparse.BooleanOptionalAction, default=False)

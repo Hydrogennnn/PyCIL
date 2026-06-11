@@ -35,6 +35,7 @@ def _train(args):
     if ddp.is_main_process():
         wandb.init(
             project = args["project"]
+            
         )
     else:
         os.environ["WANDB_MODE"] = "disabled"

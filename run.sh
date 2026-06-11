@@ -7,24 +7,49 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)   # 提取该脚本所在目录的绝�
 cd "$SCRIPT_DIR"                            # 进入该目录
 
 # --- 日志设置：将终端输出同步到本地文件run.log中 ---
-log_file="avcil_ks.log"
+
+save_name="avcil_baseline_ks"
+log_file="logs/${save_name}.log"
 : > $log_file
 exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
-
-# # --- 激活环境 ---
-# source /opt/conda/etc/profile.d/conda.sh 
-# conda activate your_conda_env
-
-# # ... 后续就是你个人的程序运行了
-# # 简单来说，你可以执行python 程序
-# python -u src/train.py --batch_size 32 --learning_lr 1e-5
-
-# # 或者，你可以执行在脚本中执行另一个脚本，该some_script.sh由于是手动bash执行的，不需要chmod赋予权限也能执行
-# bash some_script.sh
-
 
 
 wandb login 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
 
-torchrun --nproc_per_node=2 main.py --config ./exps/av_cil_ks.json
-# python main.py --config exps/moe.json
+
+
+# torchrun --nproc_per_node=2 main.py \
+python main.py \
+  --prefix reproduce \
+  --dataset kinetics \
+  --memory_size 340 \
+  --memory_per_class 20 \
+  --no-fixed_memory \
+  --shuffle \
+  --init_cls 6 \
+  --increment 6 \
+  --model_name avcil \
+  --device 0 \
+  --seed 42 \
+  --project nips26 \
+  --save_name $save_name \
+  --init_epoch 1 \
+  --epochs 1 \
+
+
+
+# torchrun --nproc_per_node=2 main.py \
+# python main.py \
+#   --prefix reproduce \
+#   --dataset ave \
+#   --memory_size 340 \
+#   --memory_per_class 20 \
+#   --no-fixed_memory \
+#   --shuffle \
+#   --init_cls 7 \
+#   --increment 7 \
+#   --model_name avcil \
+#   --device 0 \
+#   --seed 42 \
+#   --project nips26 \
+#   --save_name $save_name \

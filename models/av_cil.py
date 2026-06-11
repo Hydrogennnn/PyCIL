@@ -421,10 +421,17 @@ class AVCIL(BaseLearner):
                 self.mem_loader.sampler.set_epoch(epoch)
             self._network.train()
             loss_details = defaultdict(float)
-            correct, total = 0, 0
-            iterator = tzip(train_loader, cycle(self.mem_loader))
-            for samples in iterator:
-                curr, prev = samples
+            # iterator = zip(train_loader, cycle(self.mem_loader))
+            mem_iter = iter(self.mem_loader)
+
+            for curr in train_loader:
+                # curr, prev = samples
+                try:
+                    prev = next(mem_iter)
+                except StopIteration:
+                    mem_iter = iter(self.mem_loader)
+                    prev = next(mem_iter)
+                    
                 data, labels = curr
                 labels = labels.to(self._device)
                 exemplar_data, exemplar_labels = prev
