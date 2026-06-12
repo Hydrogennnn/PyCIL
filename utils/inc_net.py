@@ -1637,6 +1637,11 @@ class My_Net(BaseNet):
         v_fc = SimpleLinear(in_dim, out_dim)
         a_fc = SimpleLinear(in_dim, out_dim)
         return fc, v_fc, a_fc
+
+    def _entropy_from_logits(self, logits):
+        probs = F.softmax(logits, dim=1)
+        log_probs = F.log_softmax(logits, dim=1)
+        return -(probs * log_probs).sum(dim=1, keepdim=True)
     
 
     def forward(self, inputs, out_logits=True, out_features=False, out_features_norm=False, out_feature_before_fusion=False, out_attn_score=False, AFC_train_out=False):
@@ -1654,10 +1659,15 @@ class My_Net(BaseNet):
         
         audio_feature = F.relu(self.audio_proj(audio))
         visual_feature = F.relu(self.visual_proj(visual_pooled_feature))
-        audio_visual_features = visual_feature + audio_feature
         
         v_logits = self.v_fc(visual_only_feature)["logits"]
         a_logits = self.a_fc(audio_feature)["logits"]
+        v_entropy = self._entropy_from_logits(v_logits)
+        a_entropy = self._entropy_from_logits(a_logits)
+        modality_weights = F.softmax(torch.cat((-v_entropy, -a_entropy), dim=1), dim=1)
+        v_weight = modality_weights[:, 0:1]
+        a_weight = modality_weights[:, 1:2]
+        audio_visual_features = 2 * (v_weight * visual_feature + a_weight * audio_feature)
 
         logits = self.fc(audio_visual_features)["logits"]
         outputs = {}
@@ -1672,6 +1682,9 @@ class My_Net(BaseNet):
             outputs["logits"] = logits
             outputs["v_logits"] = v_logits
             outputs["a_logits"] = a_logits
+            outputs["v_entropy"] = v_entropy
+            outputs["a_entropy"] = a_entropy
+            outputs["modality_weights"] = modality_weights
         if out_features:
             if out_features_norm:
                 # outputs += (F.normalize(audio_visual_features),)
@@ -1708,6 +1721,5 @@ class My_Net(BaseNet):
         temporal_attn_score = F.softmax(temporal_score, dim=1)
 
         return spatial_attn_score, temporal_attn_score
-
 
 

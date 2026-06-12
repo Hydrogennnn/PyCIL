@@ -397,8 +397,15 @@ class AVCIL_My(BaseLearner):
             for i, (inputs, targets) in enumerate(train_loader):
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
                 # logits = self._network(inputs)["logits"]
-                logits = self._network(inputs)["logits"]
+                outputs = self._network(inputs)
+                logits = outputs["logits"]
+                v_logits = outputs["v_logits"]
+                a_logits = outputs["a_logits"]
                 loss = F.cross_entropy(logits, targets)
+                loss += 0.01 * (
+                    F.cross_entropy(v_logits, targets)
+                    + F.cross_entropy(a_logits, targets)
+                )
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
