@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from tqdm.contrib import tzip
-
+import pandas as pd
 
 
 EPSILON = 1e-8
@@ -85,6 +85,7 @@ class AVCIL_My(BaseLearner):
     def visualize_modality_weights(self, model, loader, split="test"):
         model.eval()
         all_weights = []
+        all_entropies = []
         all_targets = []
         all_preds = []
 
@@ -95,8 +96,10 @@ class AVCIL_My(BaseLearner):
                 outputs = model(inputs)
 
             weights = outputs["modality_weights"]
+            entropies = torch.cat([outputs["v_entropy"], outputs["a_entropy"]], dim=1)
             preds = torch.max(outputs["logits"], dim=1)[1]
             all_weights.append(weights.detach().cpu().numpy())
+            all_entropies.append(entropies.detach().cpu().numpy())
             all_targets.append(targets.detach().cpu().numpy())
             all_preds.append(preds.detach().cpu().numpy())
 
@@ -104,23 +107,26 @@ class AVCIL_My(BaseLearner):
             return
 
         weights = np.concatenate(all_weights, axis=0)
+        entropies = np.concatenate(all_entropies, axis=0)
         targets = np.concatenate(all_targets, axis=0)
         preds = np.concatenate(all_preds, axis=0)
         v_weights = weights[:, 0]
         a_weights = weights[:, 1]
+        v_entropies = entropies[:, 0]
+        a_entropies = entropies[:, 1]
 
         save_dir = os.path.join("save", self._dataset)
         os.makedirs(save_dir, exist_ok=True)
         prefix = os.path.join(save_dir, f"modality_weights_{split}_task_{self._cur_task}")
 
-        csv_data = np.column_stack([targets, preds, v_weights, a_weights])
+        csv_data = np.column_stack([targets, preds, v_weights, a_weights, v_entropies, a_entropies])
         np.savetxt(
             f"{prefix}.csv",
             csv_data,
             delimiter=",",
-            header="target,pred,v_weight,a_weight",
+            header="target,pred,v_weight,a_weight,v_entropy,a_entropy",
             comments="",
-            fmt=["%d", "%d", "%.6f", "%.6f"],
+            fmt=["%d", "%d", "%.6f", "%.6f", "%.6f", "%.6f"],
         )
 
         classes = np.unique(targets)
@@ -173,6 +179,91 @@ class AVCIL_My(BaseLearner):
         fig.suptitle(f"Modality Weights ({split}, task {self._cur_task})")
         fig.tight_layout()
         fig.savefig(f"{prefix}.png", dpi=200)
+        plt.close(fig)
+
+    def _class_to_task_ids(self, targets):
+        init_cls = self.args["init_cls"]
+        increment = self._increment
+        task_ids = np.zeros_like(targets, dtype=np.int64)
+        later_mask = targets >= init_cls
+        task_ids[later_mask] = 1 + ((targets[later_mask] - init_cls) // increment)
+        return task_ids
+
+    def record_uncertainty_trend(self, model, loader, split="test"):
+        model.eval()
+        all_entropies = []
+        all_targets = []
+
+        for inputs, targets in loader:
+            inputs = {k: v.to(self._device) for k, v in inputs.items()}
+            targets = targets.to(self._device)
+            with torch.no_grad():
+                outputs = model(inputs)
+
+            entropies = torch.cat([outputs["v_entropy"], outputs["a_entropy"]], dim=1)
+            all_entropies.append(entropies.detach().cpu().numpy())
+            all_targets.append(targets.detach().cpu().numpy())
+
+        if not all_entropies:
+            return
+
+        entropies = np.concatenate(all_entropies, axis=0)
+        targets = np.concatenate(all_targets, axis=0)
+        target_tasks = self._class_to_task_ids(targets)
+
+        rows = []
+        for target_task in np.unique(target_tasks):
+            idxes = target_tasks == target_task
+            task_entropy = entropies[idxes]
+            rows.append(
+                {
+                    "split": split,
+                    "eval_task": self._cur_task,
+                    "target_task": int(target_task),
+                    "age": int(self._cur_task - target_task),
+                    "num_samples": int(idxes.sum()),
+                    "v_entropy": float(task_entropy[:, 0].mean()),
+                    "a_entropy": float(task_entropy[:, 1].mean()),
+                    "mean_entropy": float(task_entropy.mean(axis=1).mean()),
+                }
+            )
+
+        save_dir = os.path.join("save", self._dataset)
+        os.makedirs(save_dir, exist_ok=True)
+        trend_path = os.path.join(save_dir, f"uncertainty_trend_{split}.csv")
+        new_df = pd.DataFrame(rows)
+        if os.path.exists(trend_path):
+            trend_df = pd.read_csv(trend_path)
+            trend_df = trend_df[
+                ~(
+                    (trend_df["split"] == split)
+                    & (trend_df["eval_task"] == self._cur_task)
+                )
+            ]
+            trend_df = pd.concat([trend_df, new_df], ignore_index=True)
+        else:
+            trend_df = new_df
+        trend_df = trend_df.sort_values(["eval_task", "target_task"])
+        trend_df.to_csv(trend_path, index=False)
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharex=True)
+        for ax, metric in zip(axes, ["v_entropy", "a_entropy", "mean_entropy"]):
+            for target_task, task_df in trend_df.groupby("target_task"):
+                task_df = task_df.sort_values("eval_task")
+                ax.plot(
+                    task_df["eval_task"],
+                    task_df[metric],
+                    marker="o",
+                    label=f"task {target_task}",
+                )
+            ax.set_title(metric)
+            ax.set_xlabel("eval task")
+            ax.set_ylabel("entropy")
+            ax.grid(True, alpha=0.3)
+        axes[-1].legend(title="sample task", bbox_to_anchor=(1.02, 1), loc="upper left")
+        fig.suptitle(f"Uncertainty Trend on {split} Set")
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_dir, f"uncertainty_trend_{split}.png"), dpi=200)
         plt.close(fig)
             
     
@@ -377,6 +468,7 @@ class AVCIL_My(BaseLearner):
         )
         if ddp.is_main_process():
             self.visualize_modality_weights(self._network, self.test_loader, split="test")
+            self.record_uncertainty_trend(self._network, self.test_loader, split="test")
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
 
         # if self._cur_task > 0:
