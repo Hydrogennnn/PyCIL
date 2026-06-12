@@ -15,6 +15,8 @@ from utils import ddp
 import wandb
 import seaborn as sns
 from itertools import cycle
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from tqdm.contrib import tzip
 
@@ -79,6 +81,99 @@ class AVCIL_My(BaseLearner):
             # all_acc[label] = np.around(
             #     (y_pred[idxes] == y_true[idxes]).sum() * 100 / len(idxes), decimals=2
             # )
+            
+    def visualize_modality_weights(self, model, loader, split="test"):
+        model.eval()
+        all_weights = []
+        all_targets = []
+        all_preds = []
+
+        for inputs, targets in loader:
+            inputs = {k: v.to(self._device) for k, v in inputs.items()}
+            targets = targets.to(self._device)
+            with torch.no_grad():
+                outputs = model(inputs)
+
+            weights = outputs["modality_weights"]
+            preds = torch.max(outputs["logits"], dim=1)[1]
+            all_weights.append(weights.detach().cpu().numpy())
+            all_targets.append(targets.detach().cpu().numpy())
+            all_preds.append(preds.detach().cpu().numpy())
+
+        if not all_weights:
+            return
+
+        weights = np.concatenate(all_weights, axis=0)
+        targets = np.concatenate(all_targets, axis=0)
+        preds = np.concatenate(all_preds, axis=0)
+        v_weights = weights[:, 0]
+        a_weights = weights[:, 1]
+
+        save_dir = os.path.join("save", self._dataset)
+        os.makedirs(save_dir, exist_ok=True)
+        prefix = os.path.join(save_dir, f"modality_weights_{split}_task_{self._cur_task}")
+
+        csv_data = np.column_stack([targets, preds, v_weights, a_weights])
+        np.savetxt(
+            f"{prefix}.csv",
+            csv_data,
+            delimiter=",",
+            header="target,pred,v_weight,a_weight",
+            comments="",
+            fmt=["%d", "%d", "%.6f", "%.6f"],
+        )
+
+        classes = np.unique(targets)
+        class_weight_mean = np.stack(
+            [
+                [v_weights[targets == cls].mean(), a_weights[targets == cls].mean()]
+                for cls in classes
+            ],
+            axis=0,
+        )
+
+        fig_height = max(8, min(24, 0.28 * len(classes) + 6))
+        fig, axes = plt.subplots(2, 2, figsize=(14, fig_height))
+
+        axes[0, 0].hist(v_weights, bins=30, alpha=0.65, label="visual")
+        axes[0, 0].hist(a_weights, bins=30, alpha=0.65, label="audio")
+        axes[0, 0].set_title("Weight Distribution")
+        axes[0, 0].set_xlabel("weight")
+        axes[0, 0].set_ylabel("count")
+        axes[0, 0].legend()
+
+        sample_idx = np.arange(len(v_weights))
+        axes[0, 1].plot(sample_idx, v_weights, linewidth=0.8, label="visual")
+        axes[0, 1].plot(sample_idx, a_weights, linewidth=0.8, label="audio")
+        axes[0, 1].set_title("Weights by Sample Order")
+        axes[0, 1].set_xlabel("sample index")
+        axes[0, 1].set_ylabel("weight")
+        axes[0, 1].legend()
+
+        sns.heatmap(
+            class_weight_mean,
+            ax=axes[1, 0],
+            cmap="viridis",
+            vmin=0.0,
+            vmax=1.0,
+            annot=True,
+            fmt=".2f",
+            xticklabels=["visual", "audio"],
+            yticklabels=classes,
+        )
+        axes[1, 0].set_title("Mean Weight per Class")
+        axes[1, 0].set_xlabel("modality")
+        axes[1, 0].set_ylabel("class")
+
+        axes[1, 1].boxplot([v_weights, a_weights], labels=["visual", "audio"])
+        axes[1, 1].set_title("Weight Summary")
+        axes[1, 1].set_ylabel("weight")
+        axes[1, 1].set_ylim(0.0, 1.0)
+
+        fig.suptitle(f"Modality Weights ({split}, task {self._cur_task})")
+        fig.tight_layout()
+        fig.savefig(f"{prefix}.png", dpi=200)
+        plt.close(fig)
             
     
     def _compute_accuracy(self, model, loader, old_model=None):
@@ -280,6 +375,8 @@ class AVCIL_My(BaseLearner):
             'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
             map_location=self._device,
         )
+        if ddp.is_main_process():
+            self.visualize_modality_weights(self._network, self.test_loader, split="test")
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
 
         # if self._cur_task > 0:
