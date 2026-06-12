@@ -62,6 +62,8 @@ def setup_parser():
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--T', type=float, default=2)
+    parser.add_argument('--entropy_tau', type=float, default=1)
+    parser.add_argument('--modal_ce_weight', type=float, default=0.01)
     parser.add_argument('--instance_contrastive_temperature', type=float, default=0.05)
     parser.add_argument('--class_contrastive_temperature', type=float, default=0.05)
 

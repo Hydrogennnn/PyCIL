@@ -1573,7 +1573,8 @@ class AV_CIL_Net(BaseNet):
 class My_Net(BaseNet):
     def __init__(self, args, pretrained, gradcam=False):
         super().__init__(args)
-
+        self.tau = args["entropy_tau"]
+        
 
         self.audio_proj = nn.Linear(768, 768)
         self.visual_proj = nn.Linear(768, 768)
@@ -1664,7 +1665,7 @@ class My_Net(BaseNet):
         a_logits = self.a_fc(audio_feature)["logits"]
         v_entropy = self._entropy_from_logits(v_logits)
         a_entropy = self._entropy_from_logits(a_logits)
-        modality_weights = F.softmax(torch.cat((-v_entropy, -a_entropy), dim=1), dim=1)
+        modality_weights = F.softmax(torch.cat((-v_entropy.detach(), -a_entropy.detach()), dim=1) / self.tau, dim=1)
         v_weight = modality_weights[:, 0:1]
         a_weight = modality_weights[:, 1:2]
         audio_visual_features = 2 * (v_weight * visual_feature + a_weight * audio_feature)

@@ -164,19 +164,30 @@ class AVE(iData):
     test_trsf = [transforms.ToTensor()]
 
     def download_data(self):
-        split = np.load("data/AVE_features/split.npy", allow_pickle=True).item()
-        self.train_data_idx = split["train"]
-        self.test_data_idx = split["test"]
-        self.val_data_idx = split["val"]
+        # split = np.load("data/AVE_features/split.npy", allow_pickle=True).item()
+        # self.train_data_idx = split["train"]
+        # self.test_data_idx = split["test"]
+        # self.val_data_idx = split["val"]
 
-        self.all_targets = np.load("data/AVE_features/labels.npy", allow_pickle=True)
-        self.train_targets = self.all_targets[self.train_data_idx]
-        self.test_targets = self.all_targets[self.test_data_idx]
-        self.val_targets = self.all_targets[self.val_data_idx]
+        # self.all_targets = np.load("data/AVE_features/labels.npy", allow_pickle=True)
+        # self.train_targets = self.all_targets[self.train_data_idx]
+        # self.test_targets = self.all_targets[self.test_data_idx]
+        # self.val_targets = self.all_targets[self.val_data_idx]
 
-        self.train_data = self.train_data_idx
-        self.test_data = self.test_data_idx
-        self.val_data = self.val_data_idx
+        # self.train_data = self.train_data_idx
+        # self.test_data = self.test_data_idx
+        # self.val_data = self.val_data_idx
+
+        self.split = np.load("data/AVE_features/split.npy", allow_pickle=True).item()
+        self.all_targets = np.load("data/AVE_features/labels.npy", allow_pickle=True).item()
+
+        self.train_data = self.split["train"]
+        self.test_data = self.split["test"]
+        self.val_data = self.split["val"]
+
+        self.train_targets = self.all_targets["train"]
+        self.test_targets = self.all_targets["test"]
+        self.val_targets = self.all_targets["val"]
 
 
 

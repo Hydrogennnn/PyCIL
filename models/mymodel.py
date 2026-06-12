@@ -365,7 +365,15 @@ class AVCIL_My(BaseLearner):
         # loss_prev = self.CE_loss(last_step_out_class_num, prev_out, exemplar_labels)
 
         # loss_CE = (loss_curr * data_batch_size + loss_prev * exemplar_data_batch_size) / (data_batch_size + exemplar_data_batch_size)
-        loss_CE = self.Slice_CE(out, labels, exemplar_labels) + 0.01*(self.Slice_CE(v_out, labels, exemplar_labels)+self.Slice_CE(a_out, labels, exemplar_labels))
+        # loss_CE = self.Slice_CE(out, labels, exemplar_labels) + 0.01*(self.Slice_CE(v_out, labels, exemplar_labels)+self.Slice_CE(a_out, labels, exemplar_labels))
+        fusion_CE_loss = self.Slice_CE(out, labels, exemplar_labels)
+        v_CE_loss = self.Slice_CE(v_out, labels, exemplar_labels)
+        a_CE_loss = self.Slice_CE(a_out, labels, exemplar_labels)
+        loss_CE = fusion_CE_loss + self.args["modal_ce_weight"]*(v_CE_loss+a_CE_loss)
+        details["tot_CE_loss"] = loss_CE.item()
+        details["v_CE_loss"] = v_CE_loss.item()
+        details["a_CE_loss"] = a_CE_loss.item()
+        details["fusion_CE_loss"] = fusion_CE_loss.item()
 
         loss_KD = torch.zeros(self._cur_task).to(self._device)
         
@@ -377,15 +385,20 @@ class AVCIL_My(BaseLearner):
             output_log = F.log_softmax(out[:, start:end] / self.args["T"], dim=1)
             loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (self.args["T"]**2)
         loss_KD = loss_KD.sum()
+        details["KD_loss"] = loss_KD.item()
         loss = loss_CE + loss_KD
         # if args.instance_contrastive:
         loss += 0.5 * instance_contra_loss
+        details["instance_contra_loss"] = instance_contra_loss.item()
         # if args.class_contrastive:
         loss += 1.0* class_contra_loss
+        details["class_contra_loss"] = class_contra_loss.item()
         # if args.attn_score_distil:
         loss += 0.5 * spatial_attn_dist_loss + (1 - 0.5) * temporal_attn_dist_loss
+        details['dist_loss'] = (0.5 * spatial_attn_dist_loss + (1 - 0.5) * temporal_attn_dist_loss).item()
 
-        return loss
+        details['tot_loss'] = loss.item()
+        return loss, details
     
     def incremental_train(self, data_manager):
         self._cur_task += 1
@@ -666,12 +679,12 @@ class AVCIL_My(BaseLearner):
                 labels = labels.to(self._device)
                 exemplar_data, exemplar_labels = prev
                 exemplar_labels = exemplar_labels.to(self._device)
-                loss = self.get_loss(data, labels, exemplar_data, exemplar_labels)
-
+                loss, details = self.get_loss(data, labels, exemplar_data, exemplar_labels)
+                for k, v in details.items():
+                    loss_details['k']+=v
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                loss_details['tot_loss'] += loss.item()
             
             adjust_learning_rate(optimizer, epoch, self.args["milestones"])
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
@@ -688,16 +701,13 @@ class AVCIL_My(BaseLearner):
                 if ddp.is_main_process():
                     print(f"save best model at epoch {epoch} with acc {val_acc}")
 
+            log_info = {}
+            for k, v in loss_details.items():
+                log_info[f"train/task_{self._cur_task}_{k}"] = loss_details[k]/len(train_loader)
+
+            log_info[f"eval/task_{self._cur_task}_acc"] = val_acc
             if ddp.is_main_process():
-                wandb.log({
-                    # f"train/task_{self._cur_task}_acc": train_acc,
-                    f"train/task_{self._cur_task}_loss" : loss_details['tot_loss'] / len(train_loader),
-                    # f"train/task_{self._cur_task}_CE_loss" : loss_details['CE_loss'] / len(train_loader),
-                    # f"train/task_{self._cur_task}_KD_loss" : loss_details['KD_loss'] / len(train_loader),
-                    # f"train/task_{self._cur_task}_Router_KD_loss" : loss_details['Router_KD_loss'] / len(train_loader),
-                    f"eval/task_{self._cur_task}_acc" : val_acc,
-                    # f"eval/task_{self._cur_task}_loss" : val_loss / len(val_loader)
-                })
+                wandb.log(log_info)
             
             # prog_bar.set_description(info)
         # self.visualize_logits(self._network, self.test_loader)

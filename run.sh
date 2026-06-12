@@ -8,7 +8,7 @@ cd "$SCRIPT_DIR"                            # 进入该目录
 
 # --- 日志设置：将终端输出同步到本地文件run.log中 ---
 
-save_name="ours_with_multihead_ave"
+save_name="ours_with_modal-entropy_detach_ave"
 log_file="logs/${save_name}.log"
 : > $log_file
 exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
@@ -19,8 +19,8 @@ wandb login wandb_v1_41VHSrWIMwFz2UhFHJhmuhFh3UU_FHkLrA61hz0vi2FmdhTMZdjlowBrQdm
 
 # Kinetics
 
-# python main.py \
 # torchrun --nproc_per_node=2 main.py \
+# python main.py \
 #   --prefix reproduce \
 #   --dataset kinetics \
 #   --memory_size 340 \
@@ -29,17 +29,18 @@ wandb login wandb_v1_41VHSrWIMwFz2UhFHJhmuhFh3UU_FHkLrA61hz0vi2FmdhTMZdjlowBrQdm
 #   --shuffle \
 #   --init_cls 6 \
 #   --increment 6 \
-#   --model_name avcil \
+#   --model_name ours \
 #   --device 0 \
 #   --seed 42 \
 #   --project nips26 \
 #   --save_name $save_name \
-#   --num_workers 2 \
+#   --num_workers 4 \
 
 
 # AVE
-# torchrun --nproc_per_node=2 main.py \
-python main.py \
+
+# python main.py \
+torchrun --nproc_per_node=2 main.py \
   --prefix reproduce \
   --dataset ave \
   --memory_size 340 \
