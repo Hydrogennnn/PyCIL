@@ -236,7 +236,7 @@ class AVE_DummyDataset(DummyDataset):
 
     def _load_data(self):
         # self.video_features = np.load("data/AVE_features/video_features.npy", allow_pickle=True, mmap_mode="r")
-        self.video_features = h5py.File("data/KS/visual_features.h5", 'r')
+        self.video_features = h5py.File("data/AVE_features/visual_features.h5", 'r')
         self.audio_features = np.load("data/AVE_features/audio_pretrained_feature_dict.npy", allow_pickle=True).item()
     
     def __getitem__(self, idx):
