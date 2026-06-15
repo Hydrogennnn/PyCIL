@@ -49,12 +49,12 @@ def setup_parser():
     parser.add_argument('--local_rank', type=int, default=0)
 
     # Parameters used by av_cil.py and mymodel.py.
-    parser.add_argument('--init_epoch', type=int, default=200)
+    parser.add_argument('--init_epoch', type=int, default=100)
     parser.add_argument('--init_lr', type=float, default=1e-3)
     parser.add_argument('--init_milestones', nargs='+', type=int, default=[60, 120, 170])
     parser.add_argument('--init_lr_decay', type=float, default=0.1)
     parser.add_argument('--init_weight_decay', type=float, default=0.0005)
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lrate', type=float, default=1e-3)
     parser.add_argument('--milestones', nargs='+', type=int, default=[100])
     parser.add_argument('--lrate_decay', type=float, default=0.1)
@@ -63,7 +63,7 @@ def setup_parser():
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--T', type=float, default=2)
     parser.add_argument('--entropy_tau', type=float, default=1)
-    parser.add_argument('--modal_ce_weight', type=float, default=0.01)
+    parser.add_argument('--modal_ce_weight', type=float, default=0.1)
     parser.add_argument('--instance_contrastive_temperature', type=float, default=0.05)
     parser.add_argument('--class_contrastive_temperature', type=float, default=0.05)
 

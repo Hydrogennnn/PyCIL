@@ -33,7 +33,7 @@ class AVCIL_My(BaseLearner):
     def after_task(self):
         # self._old_network = self._network.copy().freeze()
         self._old_network = torch.load(
-            'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+            'save/{}/av_cil_task_{}_best_model.pkl'.format(self._save_name, self._cur_task),
             map_location=self._device,
         )
         self._known_classes = self._total_classes
@@ -115,7 +115,7 @@ class AVCIL_My(BaseLearner):
         v_entropies = entropies[:, 0]
         a_entropies = entropies[:, 1]
 
-        save_dir = os.path.join("save", self._dataset)
+        save_dir = os.path.join("save", self._save_name)
         os.makedirs(save_dir, exist_ok=True)
         prefix = os.path.join(save_dir, f"modality_weights_{split}_task_{self._cur_task}")
 
@@ -228,7 +228,7 @@ class AVCIL_My(BaseLearner):
                 }
             )
 
-        save_dir = os.path.join("save", self._dataset)
+        save_dir = os.path.join("save", self._save_name)
         os.makedirs(save_dir, exist_ok=True)
         trend_path = os.path.join(save_dir, f"uncertainty_trend_{split}.csv")
         new_df = pd.DataFrame(rows)
@@ -476,7 +476,7 @@ class AVCIL_My(BaseLearner):
         self._network = ddp.unwrap_model(self._network)
         ddp.barrier()
         self._network = torch.load(
-            'save/{}/av_cil_task_{}_best_model.pkl'.format(self._dataset, self._cur_task),
+            'save/{}/av_cil_task_{}_best_model.pkl'.format(self._save_name, self._cur_task),
             map_location=self._device,
         )
         if ddp.is_main_process():
@@ -631,7 +631,7 @@ class AVCIL_My(BaseLearner):
                     val_acc,
                 )
                 if val_acc > best_acc:
-                    save_dir = os.path.join("save", self._dataset)
+                    save_dir = os.path.join("save", self._save_name)
                     if ddp.is_main_process():
                         os.makedirs(save_dir, exist_ok=True)
                     save_path = os.path.join(save_dir, 'av_cil_task_{}_best_model.pkl'.format(self._cur_task))
@@ -681,7 +681,7 @@ class AVCIL_My(BaseLearner):
                 exemplar_labels = exemplar_labels.to(self._device)
                 loss, details = self.get_loss(data, labels, exemplar_data, exemplar_labels)
                 for k, v in details.items():
-                    loss_details['k']+=v
+                    loss_details[k]+=v
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -691,7 +691,7 @@ class AVCIL_My(BaseLearner):
             val_acc = self._compute_accuracy(self._network, val_loader)
             
             if val_acc > best_acc:
-                save_dir = os.path.join("save", self._dataset)
+                save_dir = os.path.join("save", self._save_name)
                 if ddp.is_main_process():
                     os.makedirs(save_dir, exist_ok=True)
                 save_path = os.path.join(save_dir, 'av_cil_task_{}_best_model.pkl'.format(self._cur_task))
