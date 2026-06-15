@@ -604,7 +604,7 @@ class AVCIL_My(BaseLearner):
                 v_logits = outputs["v_logits"]
                 a_logits = outputs["a_logits"]
                 loss = F.cross_entropy(logits, targets)
-                loss += 0.01 * (
+                loss += self.args["modal_ce_weight"] * (
                     F.cross_entropy(v_logits, targets)
                     + F.cross_entropy(a_logits, targets)
                 )

@@ -8,33 +8,53 @@ cd "$SCRIPT_DIR"                            # 进入该目录
 
 # --- 日志设置：将终端输出同步到本地文件run.log中 ---
 
-save_name="ours_with_modal-entropy_detach_ks"
-log_file="logs/${save_name}.log"
-: > $log_file
-exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
+for modal_ce_weight in 0.01 0.1 1.0
+do
+  save_name="ours_with_modal-entropy_detach_ave_mcw${modal_ce_weight}"
+  log_file="logs/${save_name}.log"
+  : > $log_file
+  exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
+  echo $save_name
 
+  wandb login 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
 
-wandb login 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
-
-
-# Kinetics
-
-# torchrun --nproc_per_node=2 main.py \
-python main.py \
+  python main.py \
   --prefix reproduce \
-  --dataset kinetics \
+  --dataset ave \
   --memory_size 340 \
   --memory_per_class 20 \
   --no-fixed_memory \
   --shuffle \
-  --init_cls 6 \
-  --increment 6 \
+  --init_cls 7 \
+  --increment 7 \
   --model_name ours \
   --device 0 \
   --seed 42 \
   --project nips26 \
   --save_name $save_name \
-  --num_workers 4 \
+  --init_epoch 100 \
+  --epochs 100 \
+  --modal_ce_weight ${modal_ce_weight}
+
+done
+# Kinetics
+
+# torchrun --nproc_per_node=2 main.py \
+# python main.py \
+#   --prefix reproduce \
+#   --dataset kinetics \
+#   --memory_size 340 \
+#   --memory_per_class 20 \
+#   --no-fixed_memory \
+#   --shuffle \
+#   --init_cls 6 \
+#   --increment 6 \
+#   --model_name ours \
+#   --device 0 \
+#   --seed 42 \
+#   --project nips26 \
+#   --save_name $save_name \
+#   --num_workers 4 \
 
 
 # AVE
@@ -55,3 +75,5 @@ python main.py \
 #   --seed 42 \
 #   --project nips26 \
 #   --save_name $save_name \
+#   --init_epoch 100 \
+#   --epochs 100 \
