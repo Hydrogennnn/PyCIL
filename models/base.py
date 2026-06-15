@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from utils.toolkit import tensor2numpy, accuracy
 from utils import ddp
@@ -553,6 +554,29 @@ class BaseLearner(object):
             targets.append(_targets)
         return np.concatenate(vectors), np.concatenate(targets)
 
+    def _move_inputs_to_device(self, inputs):
+        if isinstance(inputs, dict):
+            return {k: v.to(self._device) for k, v in inputs.items()}
+        return inputs.to(self._device)
+
+    def _extract_logits_entropy(self, loader):
+        self._network.eval()
+        entropies = []
+        for inputs, _ in loader:
+            inputs = self._move_inputs_to_device(inputs)
+            with torch.no_grad():
+                logits = self._network(inputs)["logits"]
+                probs = F.softmax(logits, dim=1)
+                log_probs = F.log_softmax(logits, dim=1)
+                entropy = -(probs * log_probs).sum(dim=1)
+            entropies.append(tensor2numpy(entropy))
+        return np.concatenate(entropies)
+
+    def _select_high_entropy_exemplars(self, data, entropies, m):
+        select_num = min(m, len(data))
+        selected_indices = np.argsort(-entropies)[:select_num]
+        return np.array(data[selected_indices]), selected_indices
+
     def _reduce_exemplar(self, data_manager, m):
         logging.info("Reducing exemplars...({} per classes)".format(m))
         dummy_data, dummy_targets = copy.deepcopy(self._data_memory), copy.deepcopy(
@@ -563,7 +587,18 @@ class BaseLearner(object):
 
         for class_idx in range(self._known_classes):
             mask = np.where(dummy_targets == class_idx)[0]
-            dd, dt = dummy_data[mask][:m], dummy_targets[mask][:m]
+            class_data, class_targets = dummy_data[mask], dummy_targets[mask]
+            class_dset = data_manager.get_dataset(
+                [], source="train", mode="test", appendent=(class_data, class_targets)
+            )
+            class_loader = DataLoader(
+                class_dset, batch_size=batch_size, shuffle=False, num_workers=4
+            )
+            entropies = self._extract_logits_entropy(class_loader)
+            dd, selected_indices = self._select_high_entropy_exemplars(
+                class_data, entropies, m
+            )
+            dt = class_targets[selected_indices]
             self._data_memory = (
                 np.concatenate((self._data_memory, dd))
                 if len(self._data_memory) != 0
@@ -590,7 +625,9 @@ class BaseLearner(object):
             self._class_means[class_idx, :] = mean
 
     def _construct_exemplar(self, data_manager, m):
-        logging.info("Constructing exemplars...({} per classes)".format(m))
+        logging.info(
+            "Constructing high-uncertainty exemplars...({} per classes)".format(m)
+        )
         for class_idx in range(self._known_classes, self._total_classes):
             data, targets, idx_dataset = data_manager.get_dataset(
                 np.arange(class_idx, class_idx + 1),
@@ -601,39 +638,11 @@ class BaseLearner(object):
             idx_loader = DataLoader(
                 idx_dataset, batch_size=batch_size, shuffle=False, num_workers=4
             )
-            vectors, _ = self._extract_vectors(idx_loader)
-            vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
-            class_mean = np.mean(vectors, axis=0)
-
-            # Select
-            selected_exemplars = []
-            exemplar_vectors = []  # [n, feature_dim]
-            for k in range(1, m + 1):
-                S = np.sum(
-                    exemplar_vectors, axis=0
-                )  # [feature_dim] sum of selected exemplars vectors
-                mu_p = (vectors + S) / k  # [n, feature_dim] sum to all vectors
-
-                i = np.argmin(np.sqrt(np.sum((class_mean - mu_p) ** 2, axis=1)))
-                selected_exemplars.append(
-                    # np.array(data[i])
-                    data[i]
-                )  # New object to avoid passing by inference
-                exemplar_vectors.append(
-                    np.array(vectors[i])
-                )  # New object to avoid passing by inference
-
-                vectors = np.delete(
-                    vectors, i, axis=0
-                )  # Remove it to avoid duplicative selection
-                data = np.delete(
-                    data, i, axis=0
-                )  # Remove it to avoid duplicative selection
-
-            # uniques = np.unique(selected_exemplars, axis=0)
-            # print('Unique elements: {}'.format(len(uniques)))
-            # selected_exemplars = np.array(selected_exemplars)
-            exemplar_targets = np.full(m, class_idx)
+            entropies = self._extract_logits_entropy(idx_loader)
+            selected_exemplars, _ = self._select_high_entropy_exemplars(
+                data, entropies, m
+            )
+            exemplar_targets = np.full(len(selected_exemplars), class_idx)
             self._data_memory = (
                 np.concatenate((self._data_memory, selected_exemplars))
                 if len(self._data_memory) != 0
@@ -701,36 +710,11 @@ class BaseLearner(object):
                 class_dset, batch_size=batch_size, shuffle=False, num_workers=4
             )
 
-            vectors, _ = self._extract_vectors(class_loader)
-            vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
-            class_mean = np.mean(vectors, axis=0)
-
-            # Select
-            selected_exemplars = []
-            exemplar_vectors = []
-            for k in range(1, m + 1):
-                S = np.sum(
-                    exemplar_vectors, axis=0
-                )  # [feature_dim] sum of selected exemplars vectors
-                mu_p = (vectors + S) / k  # [n, feature_dim] sum to all vectors
-                i = np.argmin(np.sqrt(np.sum((class_mean - mu_p) ** 2, axis=1)))
-
-                selected_exemplars.append(
-                    data[i]
-                )  # New object to avoid passing by inference
-                exemplar_vectors.append(
-                    np.array(vectors[i])
-                )  # New object to avoid passing by inference
-
-                vectors = np.delete(
-                    vectors, i, axis=0
-                )  # Remove it to avoid duplicative selection
-                data = np.delete(
-                    data, i, axis=0
-                )  # Remove it to avoid duplicative selection
-
-            selected_exemplars = np.array(selected_exemplars)
-            exemplar_targets = np.full(m, class_idx)
+            entropies = self._extract_logits_entropy(class_loader)
+            selected_exemplars, _ = self._select_high_entropy_exemplars(
+                data, entropies, m
+            )
+            exemplar_targets = np.full(len(selected_exemplars), class_idx)
             self._data_memory = (
                 np.concatenate((self._data_memory, selected_exemplars))
                 if len(self._data_memory) != 0
