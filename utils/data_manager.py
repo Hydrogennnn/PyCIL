@@ -5,7 +5,7 @@ from PIL import Image
 from torch.nn.functional import instance_norm
 from torch.utils.data import Dataset
 from torchvision import transforms
-from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE, MMEA_CL, Kinetics
+from utils.data import iCIFAR10, iCIFAR100, iImageNet100, iImageNet1000, iCIFAR10_AA, iCIFAR100_AA, AVE, MMEA_CL, Kinetics, VGGSound
 from tqdm import tqdm
 import os
 from scipy import signal
@@ -290,6 +290,42 @@ class Kinetics_DummyDataset(DummyDataset):
         return sample, label
 
 
+class VGG_DummyDataset(DummyDataset):
+    def __init__(
+        self,
+        data,
+        labels,
+        trsf,
+        use_path=False,
+        mode='train',
+        appendent_data=None,
+    ):
+        super().__init__(data, labels, trsf, use_path, mode, appendent_data)
+        self.m = 2
+
+    def _load_data(self):
+        self.video_features = h5py.File("data/VGG/visual_features.h5", 'r')
+        self.audio_features = np.load("data/VGG/audio_pretrained_feature_dict.npy", allow_pickle=True).item()
+    
+    def __getitem__(self, idx):
+        base_len = len(self.data)
+        if idx < base_len:
+            real_id = self.data[idx]
+            # sample['m2'] = torch.mean(sample['m2'], dim=0)
+        else:
+            mem_idx = idx - base_len
+            real_id = self.appendent_data[mem_idx]
+        sample = {"m1": self.video_features[real_id][()], "m2": self.audio_features[real_id]}
+        sample = {k: torch.from_numpy(v) for k,v in sample.items()}
+        
+        assert isinstance(sample, dict)
+        
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        return sample, label
+
+
+
+
 class MMEA_DummyDataset(DummyDataset):
     def __init__(
         self,
@@ -533,6 +569,8 @@ def _get_metadata(dataset_name):
         return MMEA_CL(), MMEA_DummyDataset
     elif name == "kinetics":
         return Kinetics(), Kinetics_DummyDataset
+    elif name == "vgg":
+        return VGGSound(), VGG_DummyDataset
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
 

@@ -12,7 +12,7 @@ def dict_to_h5(data_dict, h5_path, compression=None):
 
 
 if __name__ == '__main__':
-    os.chdir("../data/AVE_features")
+    os.chdir("../data/VGG")
     
     # visual_feature = h5py.File("visual_features.h5", 'r')
 
@@ -20,8 +20,10 @@ if __name__ == '__main__':
 
 
     class_id = np.load("all_classId_vid_dict.npy", allow_pickle=True) #样本和类别的对应关系
-    visual_feature = np.load("visual_pretrained_feature_dict.npy", allow_pickle=True).item()
-    dict_to_h5(visual_feature, "visual_features.h5")
+    print(class_id.item()['test'].keys())
+    exit()
+    # visual_feature = np.load("visual_pretrained_feature_dict.npy", allow_pickle=True).item()
+    # dict_to_h5(visual_feature, "visual_features.h5")
 
 
     split = {}

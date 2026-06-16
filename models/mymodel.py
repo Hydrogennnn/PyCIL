@@ -470,6 +470,10 @@ class AVCIL_My(BaseLearner):
                 sampler=mem_sampler,
                 num_workers=self.args["num_workers"],
             )
+        if ddp.is_main_process():
+            print(f"Train size:{len(train_dataset)}",
+                  f"Test size:{len(test_dataset)}",
+                  f"Val size:{len(val_dataset)}")
 
         self._network = ddp.wrap_model(self._network, self._device, self.args)
         self._train(self.train_loader, self.val_loader)
