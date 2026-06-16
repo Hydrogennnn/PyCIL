@@ -485,7 +485,7 @@ class AVCIL_My(BaseLearner):
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
 
         # if self._cur_task > 0:
-            # self._network.weight_align(self._total_classes - self._known_classes)
+        #     self._network.weight_align(self._total_classes - self._known_classes)
     
         
     def cal_contrastive_loss(self, feature_1, feature_2, temperature=0.1):

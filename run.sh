@@ -10,9 +10,9 @@ cd "$SCRIPT_DIR"                            # 进入该目录
 
 # === Multiple Run ===
 
-for modal_ce_weight in 0.01 0.1 1.0
+for tau in 0.5 1 2 5
 do
-  save_name="ours_with_modal-entropy_detach_ave_mcw${modal_ce_weight}"
+  save_name="ours_with_modal-entropy_detach_ave_tau${tau}"
   log_file="logs/${save_name}.log"
   : > $log_file
 
@@ -37,7 +37,7 @@ do
     --save_name $save_name \
     --init_epoch 100 \
     --epochs 100 \
-    --modal_ce_weight ${modal_ce_weight}
+    --entropy_tau ${tau}
   } 2>&1 | stdbuf -oL tee "$log_file"
 done
 
