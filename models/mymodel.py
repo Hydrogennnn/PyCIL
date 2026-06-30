@@ -10,6 +10,7 @@ from models.base import BaseLearner
 from utils.inc_net import My_Net
 from collections import defaultdict
 import os
+import time
 from utils.toolkit import target2onehot, tensor2numpy
 from utils import ddp
 import wandb
@@ -23,6 +24,60 @@ import pandas as pd
 
 
 EPSILON = 1e-8
+
+
+class PhaseTimer:
+    def __init__(self, device=None):
+        self.device = device
+        self.totals = defaultdict(float)
+        self.counts = defaultdict(int)
+        self._last = None
+
+    def _sync(self):
+        if self.device is not None and torch.cuda.is_available():
+            if isinstance(self.device, torch.device) and self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
+            elif isinstance(self.device, str) and self.device.startswith("cuda"):
+                torch.cuda.synchronize(self.device)
+
+    def now(self):
+        self._sync()
+        return time.perf_counter()
+
+    def reset(self):
+        self._last = self.now()
+
+    def mark(self, name):
+        now = self.now()
+        if self._last is not None:
+            self.totals[name] += now - self._last
+            self.counts[name] += 1
+        self._last = now
+
+    def add(self, name, elapsed):
+        self.totals[name] += elapsed
+        self.counts[name] += 1
+
+    def sorted_items(self):
+        return sorted(self.totals.items(), key=lambda x: x[1], reverse=True)
+
+    def log(self, prefix, top_k=None):
+        if not self.totals or not ddp.is_main_process():
+            return
+        total = sum(self.totals.values())
+        items = self.sorted_items()
+        if top_k is not None:
+            items = items[:top_k]
+        msg = [f"{name}={seconds:.3f}s({seconds / max(total, EPSILON) * 100:.1f}%)" for name, seconds in items]
+        logging.info(f"{prefix} timing total={total:.3f}s | " + " | ".join(msg))
+
+    def wandb_dict(self, prefix):
+        total = sum(self.totals.values())
+        log_info = {f"{prefix}/time_total": total}
+        for name, seconds in self.totals.items():
+            log_info[f"{prefix}/time_{name}"] = seconds
+            log_info[f"{prefix}/time_pct_{name}"] = seconds / max(total, EPSILON)
+        return log_info
 
 
 class AVCIL_My(BaseLearner):
@@ -286,7 +341,7 @@ class AVCIL_My(BaseLearner):
         return np.around(tensor2numpy(correct) * 100 / total, decimals=2)
     
     
-    def get_loss(self, data, labels, exemplar_data, exemplar_labels):
+    def get_loss(self, data, labels, exemplar_data, exemplar_labels, timer=None):
         details = {}
         data_batch_size = labels.shape[0]
         exemplar_data_batch_size = exemplar_labels.shape[0]
@@ -300,10 +355,14 @@ class AVCIL_My(BaseLearner):
         total_audio = torch.cat((audio, exemplar_audio))
         total_visual = total_visual.to(self._device)
         total_audio = total_audio.to(self._device)
+        if timer is not None:
+            timer.mark("loss_concat_to_device")
 
         inputs = {"m1": total_visual,
                   "m2": total_audio}
         outputs = self._network(inputs, out_feature_before_fusion=True, out_attn_score=True)
+        if timer is not None:
+            timer.mark("loss_new_forward")
         out = outputs["logits"]
         v_out = outputs["v_logits"]
         a_out = outputs["a_logits"]
@@ -319,6 +378,8 @@ class AVCIL_My(BaseLearner):
             old_out, old_spatial_attn_score, old_temporal_attn_score = old_outputs["logits"], old_outputs["spatial_attn_score"], old_outputs["temporal_attn_score"]
             old_spatial_attn_score = old_spatial_attn_score.detach()
             old_temporal_attn_score = old_temporal_attn_score.detach()
+        if timer is not None:
+            timer.mark("loss_old_forward")
 
         # if args.instance_contrastive:
         instance_contra_loss = self.cal_contrastive_loss(
@@ -326,6 +387,8 @@ class AVCIL_My(BaseLearner):
             visual_feature,
             temperature=self.args["instance_contrastive_temperature"],
         )
+        if timer is not None:
+            timer.mark("loss_instance_contra")
                 
         # if args.class_contrastive:
         all_labels = torch.cat((labels, exemplar_labels))
@@ -335,6 +398,8 @@ class AVCIL_My(BaseLearner):
             all_labels,
             temperature=self.args["class_contrastive_temperature"],
         )
+        if timer is not None:
+            timer.mark("loss_class_contra")
         
         # if args.attn_score_distil:
         exem_spatial_attn_score = spatial_attn_score[data_batch_size:data_batch_size+exemplar_data_batch_size].transpose(2, 3)
@@ -351,6 +416,8 @@ class AVCIL_My(BaseLearner):
 
         spatial_attn_dist_loss = F.kl_div(exem_spatial_attn_score.log(), exem_old_spatial_attn_score, reduction='sum') / exemplar_data_batch_size
         temporal_attn_dist_loss = F.kl_div(exem_temporal_attn_score.log(), exem_old_temporal_attn_score, reduction='sum') / exemplar_data_batch_size
+        if timer is not None:
+            timer.mark("loss_attention_distill")
 
 
         last_step_out_class_num = self._known_classes
@@ -374,6 +441,8 @@ class AVCIL_My(BaseLearner):
         details["v_CE_loss"] = v_CE_loss.item()
         details["a_CE_loss"] = a_CE_loss.item()
         details["fusion_CE_loss"] = fusion_CE_loss.item()
+        if timer is not None:
+            timer.mark("loss_ce")
 
         loss_KD = torch.zeros(self._cur_task).to(self._device)
         
@@ -386,6 +455,8 @@ class AVCIL_My(BaseLearner):
             loss_KD[t] = F.kl_div(output_log, soft_target, reduction='batchmean') * (self.args["T"]**2)
         loss_KD = loss_KD.sum()
         details["KD_loss"] = loss_KD.item()
+        if timer is not None:
+            timer.mark("loss_kd")
         loss = loss_CE + loss_KD
         # if args.instance_contrastive:
         loss += 0.5 * instance_contra_loss
@@ -398,6 +469,8 @@ class AVCIL_My(BaseLearner):
         details['dist_loss'] = (0.5 * spatial_attn_dist_loss + (1 - 0.5) * temporal_attn_dist_loss).item()
 
         details['tot_loss'] = loss.item()
+        if timer is not None:
+            timer.mark("loss_sum_and_items")
         return loss, details
     
     def incremental_train(self, data_manager):
@@ -423,6 +496,7 @@ class AVCIL_My(BaseLearner):
             shuffle=train_sampler is None,
             sampler=train_sampler,
             num_workers=self.args["num_workers"],
+            pin_memory=True
         )
         if self._cur_task > 0:
             mem_set = data_manager.get_dataset(
@@ -438,12 +512,17 @@ class AVCIL_My(BaseLearner):
                 shuffle=mem_sampler is None,
                 sampler=mem_sampler,
                 num_workers=self.args["num_workers"],
+                pin_memory=True
             )
         test_dataset = data_manager.get_dataset(
             np.arange(0, self._total_classes), source="test", mode="test"
         )
         self.test_loader = DataLoader(
-            test_dataset, batch_size=self.args["batch_size"], shuffle=False, num_workers=self.args["num_workers"]
+            test_dataset, 
+            batch_size=self.args["batch_size"], 
+            shuffle=False, 
+            num_workers=self.args["num_workers"],
+            pin_memory=True
         )
         
         val_dataset = data_manager.get_dataset(
@@ -451,29 +530,29 @@ class AVCIL_My(BaseLearner):
         )
         
         self.val_loader = DataLoader(
-            val_dataset, batch_size=self.args["batch_size"], shuffle=False, num_workers=self.args["num_workers"]
+            val_dataset, 
+            batch_size=self.args["batch_size"], 
+            shuffle=False, 
+            num_workers=self.args["num_workers"],
+            pin_memory=True
         )
         
-        if self._cur_task > 0:
-            mem_dataset = data_manager.get_dataset(
-                [],
-                source='train',
-                mode='train',
-                appendent=self._get_memory()
-            )
+        # if self._cur_task > 0:
+        #     mem_dataset = data_manager.get_dataset(
+        #         [],
+        #         source='train',
+        #         mode='train',
+        #         appendent=self._get_memory()
+        #     )
             
-            mem_sampler = ddp.make_sampler(mem_dataset, shuffle=False)
-            self.mem_loader = DataLoader(
-                mem_dataset,
-                batch_size=self.args["batch_size"],
-                shuffle=False,
-                sampler=mem_sampler,
-                num_workers=self.args["num_workers"],
-            )
-        if ddp.is_main_process():
-            print(f"Train size:{len(train_dataset)}",
-                  f"Test size:{len(test_dataset)}",
-                  f"Val size:{len(val_dataset)}")
+        #     mem_sampler = ddp.make_sampler(mem_dataset, shuffle=False)
+        #     self.mem_loader = DataLoader(
+        #         mem_dataset,
+        #         batch_size=self.args["batch_size"],
+        #         shuffle=False,
+        #         sampler=mem_sampler,
+        #         num_workers=self.args["num_workers"],
+        #     )
 
         self._network = ddp.wrap_model(self._network, self._device, self.args)
         self._train(self.train_loader, self.val_loader)
@@ -600,10 +679,17 @@ class AVCIL_My(BaseLearner):
             self._network.train()
             losses = 0.0
             correct, total = 0, 0
+            timer = PhaseTimer(self._device)
+            last_iter_end = timer.now()
             for i, (inputs, targets) in enumerate(train_loader):
+                batch_ready = timer.now()
+                timer.add("train_loader", batch_ready - last_iter_end)
+                timer.reset()
                 inputs, targets = {k:v.to(self._device) for k,v in inputs.items()}, targets.to(self._device)
+                timer.mark("to_device")
                 # logits = self._network(inputs)["logits"]
                 outputs = self._network(inputs)
+                timer.mark("forward")
                 logits = outputs["logits"]
                 v_logits = outputs["v_logits"]
                 a_logits = outputs["a_logits"]
@@ -612,20 +698,27 @@ class AVCIL_My(BaseLearner):
                     F.cross_entropy(v_logits, targets)
                     + F.cross_entropy(a_logits, targets)
                 )
+                timer.mark("loss")
                 optimizer.zero_grad()
                 loss.backward()
+                timer.mark("backward")
                 optimizer.step()
+                timer.mark("optimizer_step")
                 losses += loss.item()
 
                 _, preds = torch.max(logits, dim=1)
                 correct += preds.eq(targets.expand_as(preds)).cpu().sum()
                 total += len(targets)
+                timer.mark("metrics")
+                last_iter_end = timer.now()
 
             scheduler.step()
             train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
 
             if epoch % 5 == 0:
+                eval_start = timer.now()
                 val_acc = self._compute_accuracy(self._network, val_loader)
+                timer.add("validation", timer.now() - eval_start)
                 info = "Task {}, Epoch {}/{} => Loss {:.3f}, Train_accy {:.2f}, Test_accy {:.2f}".format(
                     self._cur_task,
                     epoch + 1,
@@ -635,12 +728,14 @@ class AVCIL_My(BaseLearner):
                     val_acc,
                 )
                 if val_acc > best_acc:
+                    save_start = timer.now()
                     save_dir = os.path.join("save", self._save_name)
                     if ddp.is_main_process():
                         os.makedirs(save_dir, exist_ok=True)
                     save_path = os.path.join(save_dir, 'av_cil_task_{}_best_model.pkl'.format(self._cur_task))
                     if ddp.is_main_process():
                         torch.save(ddp.unwrap_model(self._network), save_path)
+                    timer.add("save_best_model", timer.now() - save_start)
                     best_acc = val_acc
                     if ddp.is_main_process():
                         print(f"save best model at epoch {epoch}")
@@ -654,6 +749,7 @@ class AVCIL_My(BaseLearner):
                 )
 
             prog_bar.set_description(info)
+            timer.log(f"Task {self._cur_task}, Epoch {epoch + 1}/{self.args['init_epoch']}", top_k=12)
 
         logging.info(info)
 
@@ -668,39 +764,57 @@ class AVCIL_My(BaseLearner):
                 self.mem_loader.sampler.set_epoch(epoch)
             self._network.train()
             loss_details = defaultdict(float)
+            timer = PhaseTimer(self._device)
             
             mem_iter = iter(self.mem_loader)
 
+            last_iter_end = timer.now()
             for curr in train_loader:
+                curr_ready = timer.now()
+                timer.add("current_loader", curr_ready - last_iter_end)
                 # curr, prev = samples
+                mem_start = timer.now()
                 try:
                     prev = next(mem_iter)
                 except StopIteration:
                     mem_iter = iter(self.mem_loader)
                     prev = next(mem_iter)
+                timer.add("memory_loader", timer.now() - mem_start)
 
+                timer.reset()
                 data, labels = curr
                 labels = labels.to(self._device)
                 exemplar_data, exemplar_labels = prev
                 exemplar_labels = exemplar_labels.to(self._device)
-                loss, details = self.get_loss(data, labels, exemplar_data, exemplar_labels)
+                timer.mark("labels_to_device")
+                loss, details = self.get_loss(data, labels, exemplar_data, exemplar_labels, timer=timer)
                 for k, v in details.items():
                     loss_details[k]+=v
+                timer.mark("details_accumulate")
                 optimizer.zero_grad()
                 loss.backward()
+                timer.mark("backward")
                 optimizer.step()
+                timer.mark("optimizer_step")
+                last_iter_end = timer.now()
             
+            lr_start = timer.now()
             adjust_learning_rate(optimizer, epoch, self.args["milestones"])
+            timer.add("adjust_lr", timer.now() - lr_start)
             # train_acc = np.around(tensor2numpy(correct) * 100 / total, decimals=2)
+            eval_start = timer.now()
             val_acc = self._compute_accuracy(self._network, val_loader)
+            timer.add("validation", timer.now() - eval_start)
             
             if val_acc > best_acc:
+                save_start = timer.now()
                 save_dir = os.path.join("save", self._save_name)
                 if ddp.is_main_process():
                     os.makedirs(save_dir, exist_ok=True)
                 save_path = os.path.join(save_dir, 'av_cil_task_{}_best_model.pkl'.format(self._cur_task))
                 if ddp.is_main_process():
                     torch.save(ddp.unwrap_model(self._network), save_path)
+                timer.add("save_best_model", timer.now() - save_start)
                 best_acc = val_acc
                 if ddp.is_main_process():
                     print(f"save best model at epoch {epoch} with acc {val_acc}")
@@ -710,8 +824,10 @@ class AVCIL_My(BaseLearner):
                 log_info[f"train/task_{self._cur_task}_{k}"] = loss_details[k]/len(train_loader)
 
             log_info[f"eval/task_{self._cur_task}_acc"] = val_acc
+            log_info.update(timer.wandb_dict(f"train/task_{self._cur_task}"))
             if ddp.is_main_process():
                 wandb.log(log_info)
+            timer.log(f"Task {self._cur_task}, Epoch {epoch + 1}/{self.args['epochs']}", top_k=15)
             
             # prog_bar.set_description(info)
         # self.visualize_logits(self._network, self.test_loader)

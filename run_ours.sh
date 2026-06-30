@@ -10,7 +10,7 @@ cd "$SCRIPT_DIR"                            # 进入该目录
 
 # === Single Run ===
 
-save_name="avcil_baseline_vgg"
+save_name="ours_with_modal-entropy_detach_tau0.5_vgg"
 log_file="logs/${save_name}.log"
 : > $log_file
 exec > >(stdbuf -oL tee -a "$log_file") 2>&1 # 确保实时刷新
@@ -40,7 +40,7 @@ wandb login wandb_v1_41VHSrWIMwFz2UhFHJhmuhFh3UU_FHkLrA61hz0vi2FmdhTMZdjlowBrQdm
 # python main.py \
 #   --prefix reproduce \
 #   --dataset kinetics \
-#   --memory_size 340 \
+#   --memory_size 500 \
 #   --memory_per_class 20 \
 #   --no-fixed_memory \
 #   --shuffle \
@@ -49,7 +49,9 @@ wandb login wandb_v1_41VHSrWIMwFz2UhFHJhmuhFh3UU_FHkLrA61hz0vi2FmdhTMZdjlowBrQdm
 #   --model_name ours \
 #   --device 0 \
 #   --seed 42 \
-#   --project nips26
+#   --project nips26 \
+#   --entropy_tau 0.5 \
+#   --batch_size 64 \
 
 #VGG-Sound
 python main.py \
@@ -61,7 +63,9 @@ python main.py \
   --shuffle \
   --init_cls 10 \
   --increment 10 \
-  --model_name avcil \
+  --model_name ours \
   --device 0 \
   --seed 42 \
-  --project nips26
+  --project nips26 \
+  --entropy_tau 0.5 \
+  --batch_size 64 \
